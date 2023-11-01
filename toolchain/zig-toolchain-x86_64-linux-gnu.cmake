@@ -1,0 +1,23 @@
+if(CMAKE_GENERATOR MATCHES "Visual Studio")
+    message(FATAL_ERROR "Visual Studio generator not supported, use: cmake -G Ninja")
+endif()
+set(CMAKE_SYSTEM_NAME "Linux")
+set(CMAKE_SYSTEM_VERSION 1)
+set(CMAKE_SYSTEM_PROCESSOR "x86_64")
+
+if(WIN32)
+    set(SCRIPT_SUFFIX ".cmd")
+else()
+    set(SCRIPT_SUFFIX ".sh")
+endif()
+
+SET(ZIG_COMMON_FLAGS "-target x86_64-linux-gnu -Wno-unused-command-line-argument -Wno-unused-variable -Wno-missing-exception-spec -Wno-deprecated-declarations -DLLVM_ON_UNIX")
+SET(CMAKE_C_FLAGS "${ZIG_COMMON_FLAGS}" CACHE STRING "toolchain_cflags" FORCE)
+SET(CMAKE_CXX_FLAGS "${ZIG_COMMON_FLAGS}" CACHE STRING "toolchain_cxxflags" FORCE)
+SET(CMAKE_EXE_LINKER_FLAGS "" CACHE STRING "toolchain_exelinkflags" FORCE)
+
+set(CMAKE_AR "${CMAKE_CURRENT_LIST_DIR}/zig-ar${SCRIPT_SUFFIX}")
+set(CMAKE_RANLIB "${CMAKE_CURRENT_LIST_DIR}/zig-ranlib${SCRIPT_SUFFIX}")
+set(CMAKE_RC_COMPILER "${CMAKE_CURRENT_LIST_DIR}/zig-rc${SCRIPT_SUFFIX}")
+set(CMAKE_C_COMPILER "${CMAKE_CURRENT_LIST_DIR}/zig-cc${SCRIPT_SUFFIX}")
+set(CMAKE_CXX_COMPILER "${CMAKE_CURRENT_LIST_DIR}/zig-cxx${SCRIPT_SUFFIX}")
