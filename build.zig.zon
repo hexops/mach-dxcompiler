@@ -1,0 +1,20 @@
+.{
+    .name = "mach-dxcompiler",
+    .version = "0.1.0",
+    .paths = .{
+        "src",
+        "toolchain",
+        "build.zig",
+        "build.zig.zon",
+        "LICENSE",
+        "LICENSE-APACHE",
+        "LICENSE-MIT",
+        "README.md",
+    },
+    .dependencies = .{
+        .direct3d_headers = .{
+            .url = "https://pkg.machengine.org/direct3d-headers/9617cfd497fae598610a7b0a4be0b035e7308e93.tar.gz",
+            .hash = "122098cc0b0a39d24aaffcd6d5556e8f31f5dd1a754559ffa468918f2ed6c1ad0a03",
+        },
+    },
+}

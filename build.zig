@@ -8,6 +8,7 @@ pub fn build(b: *Build) !void {
     const target = b.standardTargetOptions(.{});
     const from_source = b.option(bool, "from-source", "Build DXC from source (large C++ codebase)") orelse false;
 
+    // Zig bindings
     const mach_dxcompiler = b.addModule("mach-dxcompiler", .{
         .source_file = .{ .path = "src/main.zig" },
     });
@@ -25,7 +26,9 @@ pub fn build(b: *Build) !void {
     });
     b.installArtifact(main_tests);
     const test_step = b.step("test", "Run library tests");
-    test_step.dependOn(&b.addRunArtifact(main_tests).step);
+    test_step.dependOn(&b.addInstallArtifact(main_tests, .{}).step);
+    // const test_step = b.step("test", "Run library tests");
+    // test_step.dependOn(&b.addRunArtifact(main_tests).step);
 }
 
 pub const Options = struct {
@@ -53,11 +56,10 @@ pub fn link(b: *Build, step: *std.build.CompileStep, options: Options) !void {
 }
 
 fn linkFromSource(b: *Build, step: *std.build.CompileStep, options: Options) !void {
-    _ = step;
     try ensureGitRepoCloned(b.allocator, options.source_repository, options.source_revision, sdkPath("/libs/DirectXShaderCompiler"));
 
     // TODO: investigate SSE2 #define / cmake option for CPU target
-    // TODO: investigate option to disable SPIRV to make binary smaller
+    // TODO: investigate option to disable SPIRV to make binary smaller (ENABLE_SPIRV_CODEGEN)
     // TODO: add toolchain/ for other targets
     // TODO: do not hard-code these:
     const machZigTarget = "x86_64-windows-gnu";
@@ -66,41 +68,50 @@ fn linkFromSource(b: *Build, step: *std.build.CompileStep, options: Options) !vo
 
     const buildDir = sdkPath("/libs/DirectXShaderCompiler/build-" ++ machZigTarget);
     log.info("cd {s}", .{buildDir});
-    if (std.fs.openDirAbsolute(buildDir, .{})) |_| {
+    const need_configure = blk: {
+        if (std.fs.openDirAbsolute(buildDir, .{})) |_| {
+            break :blk false;
+        } else |err| return switch (err) {
+            error.FileNotFound => {
+                break :blk true;
+            },
+            else => err,
+        };
+    };
+    // TODO: remove DIA SDK, and submodule (not needed)
+    if (need_configure or isEnvVarTruthy(b.allocator, "FORCE_CMAKE")) {
+        log.info("Configuring with cmake", .{});
+        try exec(b.allocator, &[_][]const u8{
+            "cmake",
+            "-B",
+            "build-" ++ machZigTarget,
+            "-G",
+            "Ninja",
+            "-C",
+            "./cmake/caches/PredefinedParams.cmake",
+            "-DCMAKE_TOOLCHAIN_FILE=../../toolchain/zig-toolchain-" ++ machZigTarget ++ ".cmake",
+            "-DCMAKE_BUILD_TYPE=" ++ cmakeBuildType,
+            "-DSPIRV_BUILD_TESTS=OFF",
+            "-DLLVM_LIT_ARGS=--xunit-xml-output=testresults.xunit.xml",
+            "-DLLVM_BUILD_TESTS=OFF",
+            "-DLLVM_INCLUDE_TESTS=OFF",
+            "-DCLANG_INCLUDE_TESTS=OFF",
+            "-DHLSL_INCLUDE_TESTS=OFF",
+            "-DHLSL_INCLUDE_TESTS=OFF",
+            "-DHLSL_BUILD_DXILCONV=OFF",
+            "-DLLVM_ENABLE_WERROR=On",
+            "-DLLVM_ENABLE_EH:BOOL=ON",
+            "-DHLSL_ENABLE_FIXED_VER=ON",
+            // TODO: we shouldn't need this anymore
+            // "-DLLVM_TOOLS_BINARY_DIR="$(dirname $(which llvm-tblgen))" \
+            "-DDIASDK_GUIDS_LIBRARY=./external/DIA/lib/x64/diaguids.lib",
+            "-DDIASDK_INCLUDE_DIR=./external/DIA/include",
+            ".",
+        }, sdkPath("/libs/DirectXShaderCompiler"));
+    } else {
         // Already configured
         log.info("Already configured with cmake, skipping.", .{});
-    } else |err| return switch (err) {
-        error.FileNotFound => {
-            log.info("Configuring with cmake", .{});
-            try exec(b.allocator, &[_][]const u8{
-                "cmake",
-                "-B",
-                "build-" ++ machZigTarget,
-                "-G",
-                "Ninja",
-                "-C",
-                "./cmake/caches/PredefinedParams.cmake",
-                "-DCMAKE_TOOLCHAIN_FILE=../../toolchain/zig-toolchain-" ++ machZigTarget ++ ".cmake",
-                "-DCMAKE_BUILD_TYPE=" ++ cmakeBuildType,
-                "-DSPIRV_BUILD_TESTS=OFF",
-                "-DLLVM_LIT_ARGS=--xunit-xml-output=testresults.xunit.xml",
-                "-DLLVM_BUILD_TESTS=OFF",
-                "-DLLVM_INCLUDE_TESTS=OFF",
-                "-DCLANG_INCLUDE_TESTS=OFF",
-                "-DHLSL_INCLUDE_TESTS=OFF",
-                "-DHLSL_INCLUDE_TESTS=OFF",
-                "-DHLSL_BUILD_DXILCONV=OFF",
-                "-DLLVM_ENABLE_WERROR=On",
-                "-DLLVM_ENABLE_EH:BOOL=ON",
-                // TODO: we shouldn't need this anymore
-                // "-DLLVM_TOOLS_BINARY_DIR="$(dirname $(which llvm-tblgen))" \
-                "-DDIASDK_GUIDS_LIBRARY=./external/DIA/lib/x64/diaguids.lib",
-                "-DDIASDK_INCLUDE_DIR=./external/DIA/include",
-                ".",
-            }, sdkPath("/libs/DirectXShaderCompiler"));
-        },
-        else => err,
-    };
+    }
 
     ensureNinja(b.allocator);
     try exec(b.allocator, &[_][]const u8{
@@ -108,6 +119,54 @@ fn linkFromSource(b: *Build, step: *std.build.CompileStep, options: Options) !vo
         "-C",
         "build-" ++ machZigTarget,
     }, sdkPath("/libs/DirectXShaderCompiler"));
+
+    const dxcompiler = b.addStaticLibrary(.{
+        .name = "zigdxcompiler",
+        .root_source_file = b.addWriteFiles().add("empty.c", ""),
+        .optimize = step.optimize,
+        .target = step.target,
+    });
+    dxcompiler.addCSourceFile(.{ .file = .{ .path = "src/mach_dxc.cpp" }, .flags = &.{} });
+    // dxcompiler.addCSourceFile(.{ .file = .{ .path = "src/dxguid.cpp" }, .flags = &.{} });
+    dxcompiler.linkLibCpp();
+    dxcompiler.addLibraryPath(.{ .path = sdkPath("/libs/DirectXShaderCompiler/build-" ++ machZigTarget ++ "/lib") });
+    step.addLibraryPath(.{ .path = sdkPath("/libs/DirectXShaderCompiler/build-" ++ machZigTarget ++ "/lib") });
+
+    dxcompiler.linkSystemLibrary("machdxc");
+
+    dxcompiler.linkSystemLibrary("version");
+    dxcompiler.linkSystemLibrary("kernel32");
+    dxcompiler.linkSystemLibrary("user32");
+    dxcompiler.linkSystemLibrary("gdi32");
+    dxcompiler.linkSystemLibrary("winspool");
+    dxcompiler.linkSystemLibrary("shell32");
+    dxcompiler.linkSystemLibrary("ole32");
+    dxcompiler.linkSystemLibrary("oleaut32");
+    dxcompiler.linkSystemLibrary("uuid");
+    dxcompiler.linkSystemLibrary("comdlg32");
+    dxcompiler.linkSystemLibrary("advapi32");
+
+    // TODO: add to path for MSVC dxcapi.h
+    // dxcompiler.addIncludePath(.{ .path = "libs/DirectXShaderCompiler/include/dxc" });
+    // TODO: install GNU header from direct3d_headers?
+    // TODO: install MSVC header?:
+    // dxcompiler.installHeader("libs/DirectXShaderCompiler/include/dxc/dxcapi.h", "dxc");
+    if (options.install_libs) b.installArtifact(dxcompiler);
+    dxcompiler.linkLibrary(b.dependency("direct3d_headers", .{
+        .target = step.target,
+        .optimize = step.optimize,
+    }).artifact("direct3d-headers"));
+    @import("direct3d_headers").addLibraryPath(dxcompiler);
+
+    // step.addLibraryPath(.{ .path = sdkPath("/libs/DirectXShaderCompiler/build-" ++ machZigTarget ++ "/lib") });
+
+    step.addIncludePath(.{ .path = "src" });
+    step.linkLibrary(dxcompiler);
+    step.linkLibrary(b.dependency("direct3d_headers", .{
+        .target = step.target,
+        .optimize = step.optimize,
+    }).artifact("direct3d-headers"));
+    @import("direct3d_headers").addLibraryPath(step);
 }
 
 pub fn linkFromBinary(b: *Build, step: *std.build.CompileStep, options: Options) !void {
