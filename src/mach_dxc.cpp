@@ -7,7 +7,7 @@
 // CROSS_PLATFORM_UUIDOF(IDxcBlobWide, "A3F84EAB-0FAA-497E-A39C-EE6ED60B2D84")
 
 // Avoid __declspec(dllimport) since dxcompiler is static.
-#define DXC_API_IMPORT __attribute__((visibility("default")))
+#define DXC_API_IMPORT
 #include <dxcapi.h>
 
 #include "mach_dxc.h"
