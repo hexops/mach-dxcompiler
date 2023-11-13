@@ -88,7 +88,7 @@ fn linkFromSource(b: *Build, step: *std.build.CompileStep, options: Options) !vo
             prefix ++ "/tools/clang/lib/ASTMatchers",
             prefix ++ "/tools/clang/lib/Tooling/Core",
             prefix ++ "/tools/clang/lib/Tooling",
-            prefix ++ "/tools/clang/lib/Format", // TODO: try build without it
+            prefix ++ "/tools/clang/lib/Format",
             prefix ++ "/tools/clang/lib/Rewrite",
             prefix ++ "/tools/clang/lib/Frontend/Rewrite",
             prefix ++ "/tools/clang/lib/Frontend",
@@ -196,8 +196,7 @@ fn linkFromSource(b: *Build, step: *std.build.CompileStep, options: Options) !vo
     @import("direct3d_headers").addLibraryPath(machdxc);
 
     // TODO: investigate SSE2 #define / cmake option for CPU target
-    // TODO: investigate option to disable SPIRV to make binary smaller (ENABLE_SPIRV_CODEGEN)
-
+    //
     // TODO: investigate how projects/dxilconv/lib/DxbcConverter/DxbcConverterImpl.h is getting pulled
     // in, we can get rid of dxbc conversion presumably
 
