@@ -69,11 +69,39 @@ fn linkFromSource(b: *Build, step: *std.build.CompileStep, options: Options) !vo
     });
     b.installArtifact(machdxc);
     if (options.install_libs) b.installArtifact(machdxc);
-    machdxc.addCSourceFile(.{ .file = .{ .path = "src/mach_dxc.cpp" }, .flags = &.{} });
+    machdxc.addCSourceFile(.{
+        .file = .{ .path = "src/mach_dxc.cpp" },
+        .flags = &.{
+            "-fms-extensions", // __uuidof and friends (on non-windows targets)
+        },
+    });
+    if (machdxc.target.getOsTag() != .windows) machdxc.defineCMacro("HAVE_DLFCN_H", "1");
+
+    const debug_symbols = false; // TODO: build option
+    var cflags = std.ArrayList([]const u8).init(b.allocator);
+    var cppflags = std.ArrayList([]const u8).init(b.allocator);
+    if (!debug_symbols) {
+        try cflags.append("-g0");
+        try cppflags.append("-g0");
+    }
+    try cppflags.append("-std=c++14");
+    const base_flags = &.{
+        "-Wno-unused-command-line-argument",
+        "-Wno-unused-variable",
+        "-Wno-missing-exception-spec",
+        "-Wno-macro-redefined",
+        "-Wno-unknown-attributes",
+        "-Wno-implicit-fallthrough",
+        "-fms-extensions", // __uuidof and friends (on non-windows targets)
+    };
+    try cflags.appendSlice(base_flags);
+    try cppflags.appendSlice(base_flags);
 
     addConfigHeaders(b, machdxc);
     addIncludes(machdxc);
     try appendLangScannedSources(b, machdxc, .{
+        .cflags = cflags.items,
+        .cppflags = cppflags.items,
         .rel_dirs = &.{
             prefix ++ "/tools/clang/lib/Lex",
             prefix ++ "/tools/clang/lib/Basic",
@@ -124,7 +152,6 @@ fn linkFromSource(b: *Build, step: *std.build.CompileStep, options: Options) !vo
             prefix ++ "/lib/DxilCompression",
             prefix ++ "/lib/DxilRootSignature",
         },
-        .flags = &.{},
         .excluding_contains = &.{
             // tools/clang/lib/Analysis/CMakeLists.txt
             "CocoaConventions.cpp",
@@ -168,32 +195,32 @@ fn linkFromSource(b: *Build, step: *std.build.CompileStep, options: Options) !vo
             "PluginLoader.cpp",
         },
     });
+    machdxc.defineCMacro("NDEBUG", ""); // disable assertions
+    if (machdxc.target.getOsTag() == .windows) {
+        machdxc.defineCMacro("LLVM_ON_WIN32", "1");
+        try appendLangScannedSources(b, machdxc, .{
+            .cflags = cflags.items,
+            .cppflags = cppflags.items,
+            .rel_dirs = &.{prefix ++ "/lib/Support/Windows"},
+            .excluding_contains = &.{".inc.cpp"},
+        });
+        machdxc.linkSystemLibrary("ole32");
+        machdxc.linkSystemLibrary("oleaut32");
+        machdxc.linkSystemLibrary("version");
+    } else {
+        machdxc.defineCMacro("LLVM_ON_UNIX", "1");
+        try appendLangScannedSources(b, machdxc, .{
+            .cflags = cflags.items,
+            .cppflags = cppflags.items,
+            .rel_dirs = &.{prefix ++ "/lib/Support/Unix"},
+            .excluding_contains = &.{".inc.cpp"},
+        });
+    }
 
-    // Windows
-    try appendLangScannedSources(b, machdxc, .{
-        .rel_dirs = &.{prefix ++ "/lib/Support/Windows"},
-        .flags = &.{},
-        .excluding_contains = &.{".inc.cpp"},
-    });
-
-    machdxc.linkSystemLibrary("ole32");
-    machdxc.linkSystemLibrary("oleaut32");
-    machdxc.linkSystemLibrary("version");
-
-    // TODO: ability to use MSVC dxcapi.h via this path:
-    // machdxc.addIncludePath(.{ .path = prefix++"/include/dxc" });
-    // TODO: install the resulting direct3d_headers / dxcapi.h?
-    // TODO: install MSVC header?:
-    // machdxc.installHeader(prefix++"/include/dxc/dxcapi.h", "dxc");
     if (options.install_libs) b.installArtifact(machdxc);
 
     machdxc.linkLibCpp();
     machdxc.addIncludePath(.{ .path = "src" });
-    machdxc.linkLibrary(b.dependency("direct3d_headers", .{
-        .target = step.target,
-        .optimize = step.optimize,
-    }).artifact("direct3d-headers"));
-    @import("direct3d_headers").addLibraryPath(machdxc);
 
     // TODO: investigate SSE2 #define / cmake option for CPU target
     //
@@ -211,31 +238,24 @@ fn linkFromSource(b: *Build, step: *std.build.CompileStep, options: Options) !vo
             .file = .{ .path = prefix ++ "/tools/clang/tools/dxc/dxcmain.cpp" },
             .flags = &.{"-std=c++17"},
         });
+        dxc_exe.defineCMacro("NDEBUG", ""); // disable assertions
+        if (dxc_exe.target.getOsTag() != .windows) dxc_exe.defineCMacro("HAVE_DLFCN_H", "1");
         dxc_exe.addIncludePath(.{ .path = prefix ++ "/tools/clang/tools" });
         dxc_exe.addIncludePath(.{ .path = prefix ++ "/include" });
         addConfigHeaders(b, dxc_exe);
         addIncludes(dxc_exe);
         try appendLangScannedSources(b, dxc_exe, .{
+            .cflags = cflags.items,
+            .cppflags = cppflags.items,
             .rel_dirs = &.{prefix ++ "/tools/clang/tools/dxclib"},
-            .flags = &.{},
             .excluding_contains = &.{},
         });
         b.installArtifact(dxc_exe);
         dxc_exe.linkLibrary(machdxc);
-        dxc_exe.linkLibrary(b.dependency("direct3d_headers", .{
-            .target = dxc_exe.target,
-            .optimize = dxc_exe.optimize,
-        }).artifact("direct3d-headers"));
-        @import("direct3d_headers").addLibraryPath(dxc_exe);
     }
 
     step.linkLibrary(machdxc);
     step.addIncludePath(.{ .path = "src" });
-    step.linkLibrary(b.dependency("direct3d_headers", .{
-        .target = step.target,
-        .optimize = step.optimize,
-    }).artifact("direct3d-headers"));
-    @import("direct3d_headers").addLibraryPath(step);
 }
 
 pub fn linkFromBinary(b: *Build, step: *std.build.CompileStep, options: Options) !void {
@@ -314,24 +334,8 @@ pub fn addConfigHeaders(b: *Build, step: *std.build.CompileStep) void {
         .{},
     ));
 
-    // /include/llvm/Config/llvm-config.h.cmake
-    step.addConfigHeader(b.addConfigHeader(
-        .{
-            .style = .{ .cmake = .{ .path = prefix ++ "/include/llvm/Config/llvm-config.h.cmake" } },
-            .include_path = "llvm/Config/llvm-config.h",
-        },
-        getLLVMConfig(),
-    ));
-
-    // TODO
-    // // /include/llvm/Config/config.h.cmake
-    // machdxc.addConfigHeader(b.addConfigHeader(
-    //     .{
-    //         .style = .{ .cmake = .{ .path = prefix ++ "/include/llvm/Config/config.h.cmake" } },
-    //         .include_path = "llvm/Config/config.h",
-    //     },
-    //     getLLVMConfig(),
-    // ));
+    step.addConfigHeader(addConfigHeaderLLVMConfig(b, step.target, .llvm_config_h));
+    step.addConfigHeader(addConfigHeaderLLVMConfig(b, step.target, .config_h));
 
     // /include/dxc/config.h.cmake
     step.addConfigHeader(b.addConfigHeader(
@@ -369,97 +373,149 @@ pub fn addIncludes(step: *std.build.CompileStep) void {
     step.addIncludePath(.{ .path = prefix ++ "/include/llvm/Option" });
     step.addIncludePath(.{ .path = prefix ++ "/include/llvm/PassPrinters" });
     step.addIncludePath(.{ .path = prefix ++ "/include/llvm/Passes" });
+    step.addIncludePath(.{ .path = prefix ++ "/include/dxc" });
+    step.addIncludePath(.{ .path = prefix ++ "/external/DirectX-Headers/include/directx" });
+    if (step.target.getOsTag() != .windows) step.addIncludePath(.{ .path = prefix ++ "/external/DirectX-Headers/include/wsl/stubs" });
 }
 
-const LLVMConfig = struct {
-    // /* Installation directory for binary executables */
-    // /* #undef LLVM_BINDIR */
-
-    // /* Time at which LLVM was configured */
-    // /* #undef LLVM_CONFIGTIME */
-
-    // /* Installation directory for data files */
-    // /* #undef LLVM_DATADIR */
-
-    // /* Target triple LLVM will generate code for by default */
-    LLVM_DEFAULT_TARGET_TRIPLE: []const u8 = "dxil-ms-dx",
-
-    // /* Installation directory for documentation */
-    // /* #undef LLVM_DOCSDIR */
-
-    // /* Define if threads enabled */
-    LLVM_ENABLE_THREADS: i64 = 1,
-
-    // /* Installation directory for config files */
-    // /* #undef LLVM_ETCDIR */
-
-    // /* Has gcc/MSVC atomic intrinsics */
-    LLVM_HAS_ATOMICS: i64 = 1,
-
-    // /* Host triple LLVM will be executed on */
-    LLVM_HOST_TRIPLE: []const u8,
-
-    // /* Installation directory for include files */
-    // /* #undef LLVM_INCLUDEDIR */
-
-    // /* Installation directory for .info files */
-    // /* #undef LLVM_INFODIR */
-
-    // /* Installation directory for man pages */
-    // /* #undef LLVM_MANDIR */
-
-    // /* LLVM architecture name for the native architecture, if available */
-    LLVM_NATIVE_ARCH: []const u8,
-
-    // /* LLVM name for the native AsmParser init function, if available */
-    // /* #undef LLVM_NATIVE_ASMPARSER */
-
-    // /* LLVM name for the native AsmPrinter init function, if available */
-    // /* #undef LLVM_NATIVE_ASMPRINTER */
-
-    // /* LLVM name for the native Disassembler init function, if available */
-    // /* #undef LLVM_NATIVE_DISASSEMBLER */
-
-    // /* LLVM name for the native Target init function, if available */
-    // /* #undef LLVM_NATIVE_TARGET */
-
-    // /* LLVM name for the native TargetInfo init function, if available */
-    // /* #undef LLVM_NATIVE_TARGETINFO */
-
-    // /* LLVM name for the native target MC init function, if available */
-    // /* #undef LLVM_NATIVE_TARGETMC */
-
-    // /* Define if this is Unixish platform */
-    LLVM_ON_UNIX: ?i64 = null,
-
-    // /* Define if this is Win32ish platform */
-    LLVM_ON_WIN32: ?i64 = null,
-
-    // /* Installation prefix directory */
-    LLVM_PREFIX: []const u8,
-
-    // /* Define if we have the Intel JIT API runtime support library */
-    // /* #undef LLVM_USE_INTEL_JITEVENTS */
-
-    // /* Define if we have the oprofile JIT-support library */
-    // /* #undef LLVM_USE_OPROFILE */
-
-    LLVM_VERSION_MAJOR: i64 = 3,
-    LLVM_VERSION_MINOR: i64 = 7,
-    LLVM_VERSION_PATCH: i64 = 0,
-    LLVM_VERSION_STRING: []const u8 = "3.7-v1.4.0.2274-1812-machdxc",
-
-    // /* Define if we link Polly to the tools */
-    // /* #undef LINK_POLLY_INTO_TOOLS */
-};
-
-fn getLLVMConfig() LLVMConfig {
-    // TODO: non-windows architectures
-    return .{
-        .LLVM_HOST_TRIPLE = "x86_64-w64-mingw32",
-        .LLVM_NATIVE_ARCH = "X86",
-        .LLVM_ON_WIN32 = 1,
+// /include/llvm/Config/llvm-config.h.cmake
+// /include/llvm/Config/config.h.cmake (derives llvm-config.h.cmake)
+pub fn addConfigHeaderLLVMConfig(b: *Build, target: std.zig.CrossTarget, which: anytype) *std.Build.Step.ConfigHeader {
+    // Note: LLVM_HOST_TRIPLEs can be found by running $ llc --version | grep Default
+    // Note: arm64 is an alias for aarch64, we always use aarch64 over arm64.
+    const cross_platform = .{
         .LLVM_PREFIX = "/usr/local",
+        .LLVM_DEFAULT_TARGET_TRIPLE = "dxil-ms-dx",
+        .LLVM_ENABLE_THREADS = 1,
+        .LLVM_HAS_ATOMICS = 1,
+        .LLVM_VERSION_MAJOR = 3,
+        .LLVM_VERSION_MINOR = 7,
+        .LLVM_VERSION_PATCH = 0,
+        .LLVM_VERSION_STRING = "3.7-v1.4.0.2274-1812-machdxc",
+    };
+
+    const LLVMConfigH = struct {
+        LLVM_HOST_TRIPLE: []const u8,
+        LLVM_ON_WIN32: ?i64 = null,
+        LLVM_ON_UNIX: ?i64 = null,
+        HAVE_SYS_MMAN_H: ?i64 = null,
+    };
+    const llvm_config_h = blk: {
+        if (target.getOsTag() == .windows) {
+            if (target.getAbi() == .msvc) @panic("TODO: support *-windows-msvc targets");
+            break :blk switch (target.getCpuArch()) {
+                .x86_64 => merge(cross_platform, LLVMConfigH{
+                    .LLVM_HOST_TRIPLE = "x86_64-w64-mingw32",
+                    .LLVM_ON_WIN32 = 1,
+                }),
+                .aarch64 => @panic("TODO: support aarch64-windows-gnu targets"),
+                else => @panic("target architecture not supported"),
+            };
+        } else if (target.getOsTag().isDarwin()) {
+            break :blk switch (target.getCpuArch()) {
+                .aarch64 => merge(cross_platform, LLVMConfigH{
+                    .LLVM_HOST_TRIPLE = "aarch64-apple-darwin",
+                    .LLVM_ON_UNIX = 1,
+                    .HAVE_SYS_MMAN_H = 1,
+                }),
+                .x86_64 => @panic("TODO: support Intel macOS"),
+                else => @panic("target architecture not supported"),
+            };
+        } else {
+            // Assume linux-like
+            break :blk switch (target.getCpuArch()) {
+                .aarch64 => @panic("TODO: support aarch64-linux targets"),
+                .x86_64 => @panic("TODO: support x86_64-linux targets"),
+                else => @panic("target architecture not supported"),
+            };
+        }
+    };
+
+    const if_windows: ?i64 = if (target.getOsTag() == .windows) 1 else null;
+    const if_not_windows: ?i64 = if (target.getOsTag() == .windows) null else 1;
+    const config_h = merge(llvm_config_h, .{
+        .HAVE_STRERROR = if_windows,
+        .HAVE_STRERROR_R = if_not_windows,
+        .HAVE_MALLOC_H = if_windows,
+        .HAVE_MALLOC_MALLOC_H = if_not_windows,
+        .HAVE_MALLOC_ZONE_STATISTICS = if_not_windows,
+        .HAVE_GETPAGESIZE = if_not_windows,
+        .HAVE_PTHREAD_H = if_not_windows,
+        .HAVE_PTHREAD_GETSPECIFIC = if_not_windows,
+        .HAVE_PTHREAD_MUTEX_LOCK = if_not_windows,
+        .HAVE_PTHREAD_RWLOCK_INIT = if_not_windows,
+        .HAVE_DLOPEN = if_not_windows,
+        .HAVE_DLFCN_H = if_not_windows, //
+
+        .BUG_REPORT_URL = "http://llvm.org/bugs/",
+        .ENABLE_BACKTRACES = "",
+        .ENABLE_CRASH_OVERRIDES = "",
+        .DISABLE_LLVM_DYLIB_ATEXIT = "",
+        .ENABLE_PIC = "",
+        .ENABLE_TIMESTAMPS = 1,
+        .HAVE_CLOSEDIR = 1,
+        .HAVE_CXXABI_H = 1,
+        .HAVE_DECL_STRERROR_S = 1,
+        .HAVE_DIRENT_H = 1,
+        .HAVE_ERRNO_H = 1,
+        .HAVE_FCNTL_H = 1,
+        .HAVE_FENV_H = 1,
+        .HAVE_GETCWD = 1,
+        .HAVE_GETTIMEOFDAY = 1,
+        .HAVE_INT64_T = 1,
+        .HAVE_INTTYPES_H = 1,
+        .HAVE_ISATTY = 1,
+        .HAVE_LIBPSAPI = 1,
+        .HAVE_LIBSHELL32 = 1,
+        .HAVE_LIMITS_H = 1,
+        .HAVE_LINK_EXPORT_DYNAMIC = 1,
+        .HAVE_MKSTEMP = 1,
+        .HAVE_MKTEMP = 1,
+        .HAVE_OPENDIR = 1,
+        .HAVE_READDIR = 1,
+        .HAVE_SIGNAL_H = 1,
+        .HAVE_STDINT_H = 1,
+        .HAVE_STRTOLL = 1,
+        .HAVE_SYS_PARAM_H = 1,
+        .HAVE_SYS_STAT_H = 1,
+        .HAVE_SYS_TIME_H = 1,
+        .HAVE_UINT64_T = 1,
+        .HAVE_UNISTD_H = 1,
+        .HAVE_UTIME_H = 1,
+        .HAVE__ALLOCA = 1,
+        .HAVE___ASHLDI3 = 1,
+        .HAVE___ASHRDI3 = 1,
+        .HAVE___CMPDI2 = 1,
+        .HAVE___DIVDI3 = 1,
+        .HAVE___FIXDFDI = 1,
+        .HAVE___FIXSFDI = 1,
+        .HAVE___FLOATDIDF = 1,
+        .HAVE___LSHRDI3 = 1,
+        .HAVE___MAIN = 1,
+        .HAVE___MODDI3 = 1,
+        .HAVE___UDIVDI3 = 1,
+        .HAVE___UMODDI3 = 1,
+        .HAVE____CHKSTK_MS = 1,
+        .LLVM_ENABLE_ZLIB = 0,
+        .PACKAGE_BUGREPORT = "http://llvm.org/bugs/",
+        .PACKAGE_NAME = "LLVM",
+        .PACKAGE_STRING = "LLVM 3.7-v1.4.0.2274-1812-g84da60c6c-dirty",
+        .PACKAGE_VERSION = "3.7-v1.4.0.2274-1812-g84da60c6c-dirty",
+        .RETSIGTYPE = "void",
+        .WIN32_ELMCB_PCSTR = "PCSTR",
+        .HAVE__CHSIZE_S = 1,
+    });
+
+    return switch (which) {
+        .llvm_config_h => b.addConfigHeader(.{
+            .style = .{ .cmake = .{ .path = prefix ++ "/include/llvm/Config/llvm-config.h.cmake" } },
+            .include_path = "llvm/Config/llvm-config.h",
+        }, llvm_config_h),
+        .config_h => b.addConfigHeader(.{
+            .style = .{ .cmake = .{ .path = prefix ++ "/include/llvm/Config/config.h.cmake" } },
+            .include_path = "llvm/Config/config.h",
+        }, config_h),
+        else => unreachable,
     };
 }
 
@@ -542,27 +598,12 @@ fn isEnvVarTruthy(allocator: std.mem.Allocator, name: []const u8) bool {
     }
 }
 
-pub fn appendFlags(flags: *std.ArrayList([]const u8), debug_symbols: bool, is_cpp: bool) !void {
-    if (debug_symbols) try flags.append("-g1") else try flags.append("-g0");
-    if (is_cpp) try flags.append("-std=c++14");
-    try flags.appendSlice(&.{
-        "-Wno-unused-command-line-argument",
-        "-Wno-unused-variable",
-        "-Wno-missing-exception-spec",
-        "-Wno-macro-redefined",
-        "-Wno-unknown-attributes",
-        "-Wno-implicit-fallthrough",
-        "-DLLVM_ON_WIN32",
-        "-DNDEBUG", // disable debug
-    });
-}
-
 fn appendLangScannedSources(
     b: *Build,
     step: *std.build.CompileStep,
     args: struct {
-        debug_symbols: bool = false,
-        flags: []const []const u8,
+        cflags: []const []const u8,
+        cppflags: []const []const u8,
         rel_dirs: []const []const u8 = &.{},
         objc: bool = false,
         excluding: []const []const u8 = &.{},
@@ -570,8 +611,7 @@ fn appendLangScannedSources(
     },
 ) !void {
     var cpp_flags = std.ArrayList([]const u8).init(b.allocator);
-    try cpp_flags.appendSlice(args.flags);
-    try appendFlags(&cpp_flags, args.debug_symbols, true);
+    try cpp_flags.appendSlice(args.cppflags);
     const cpp_extensions: []const []const u8 = if (args.objc) &.{".mm"} else &.{ ".cpp", ".cc" };
     try appendScannedSources(b, step, .{
         .flags = cpp_flags.items,
@@ -582,8 +622,7 @@ fn appendLangScannedSources(
     });
 
     var flags = std.ArrayList([]const u8).init(b.allocator);
-    try flags.appendSlice(args.flags);
-    try appendFlags(&flags, args.debug_symbols, false);
+    try flags.appendSlice(args.cflags);
     const c_extensions: []const []const u8 = if (args.objc) &.{".m"} else &.{".c"};
     try appendScannedSources(b, step, .{
         .flags = flags.items,
@@ -658,6 +697,31 @@ fn scanSources(
 
         try dst.append(abs_path);
     }
+}
+
+// Merge struct types A and B
+pub fn Merge(comptime a: type, comptime b: type) type {
+    const a_fields = @typeInfo(a).Struct.fields;
+    const b_fields = @typeInfo(b).Struct.fields;
+
+    return @Type(std.builtin.Type{
+        .Struct = .{
+            .layout = .Auto,
+            .fields = a_fields ++ b_fields,
+            .decls = &.{},
+            .is_tuple = false,
+        },
+    });
+}
+
+// Merge struct values A and B
+pub fn merge(a: anytype, b: anytype) Merge(@TypeOf(a), @TypeOf(b)) {
+    var merged: Merge(@TypeOf(a), @TypeOf(b)) = undefined;
+    inline for (@typeInfo(@TypeOf(merged)).Struct.fields) |f| {
+        if (@hasField(@TypeOf(a), f.name)) @field(merged, f.name) = @field(a, f.name);
+        if (@hasField(@TypeOf(b), f.name)) @field(merged, f.name) = @field(b, f.name);
+    }
+    return merged;
 }
 
 fn sdkPath(comptime suffix: []const u8) []const u8 {
