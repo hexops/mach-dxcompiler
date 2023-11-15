@@ -408,7 +408,10 @@ pub fn addConfigHeaderLLVMConfig(b: *Build, target: std.zig.CrossTarget, which: 
                     .LLVM_HOST_TRIPLE = "x86_64-w64-mingw32",
                     .LLVM_ON_WIN32 = 1,
                 }),
-                .aarch64 => @panic("TODO: support aarch64-windows-gnu targets"),
+                .aarch64 => merge(cross_platform, LLVMConfigH{
+                    .LLVM_HOST_TRIPLE = "aarch64-w64-mingw32",
+                    .LLVM_ON_WIN32 = 1,
+                }),
                 else => @panic("target architecture not supported"),
             };
         } else if (target.getOsTag().isDarwin()) {
@@ -418,26 +421,42 @@ pub fn addConfigHeaderLLVMConfig(b: *Build, target: std.zig.CrossTarget, which: 
                     .LLVM_ON_UNIX = 1,
                     .HAVE_SYS_MMAN_H = 1,
                 }),
-                .x86_64 => @panic("TODO: support Intel macOS"),
+                .x86_64 => merge(cross_platform, LLVMConfigH{
+                    .LLVM_HOST_TRIPLE = "x86_64-apple-darwin",
+                    .LLVM_ON_UNIX = 1,
+                    .HAVE_SYS_MMAN_H = 1,
+                }),
                 else => @panic("target architecture not supported"),
             };
         } else {
             // Assume linux-like
+            // TODO: musl support?
             break :blk switch (target.getCpuArch()) {
-                .aarch64 => @panic("TODO: support aarch64-linux targets"),
-                .x86_64 => @panic("TODO: support x86_64-linux targets"),
+                .aarch64 => merge(cross_platform, LLVMConfigH{
+                    .LLVM_HOST_TRIPLE = "aarch64-linux-gnu",
+                    .LLVM_ON_UNIX = 1,
+                    .HAVE_SYS_MMAN_H = 1,
+                }),
+                .x86_64 => merge(cross_platform, LLVMConfigH{
+                    .LLVM_HOST_TRIPLE = "x86_64-linux-gnu",
+                    .LLVM_ON_UNIX = 1,
+                    .HAVE_SYS_MMAN_H = 1,
+                }),
                 else => @panic("target architecture not supported"),
             };
         }
     };
 
-    const if_windows: ?i64 = if (target.getOsTag() == .windows) 1 else null;
-    const if_not_windows: ?i64 = if (target.getOsTag() == .windows) null else 1;
+    const tag = target.getOsTag();
+    const if_windows: ?i64 = if (tag == .windows) 1 else null;
+    const if_not_windows: ?i64 = if (tag == .windows) null else 1;
+    const if_windows_or_linux: ?i64 = if (tag == .windows and !tag.isDarwin()) 1 else null;
+    const if_darwin: ?i64 = if (tag.isDarwin()) 1 else null;
     const config_h = merge(llvm_config_h, .{
         .HAVE_STRERROR = if_windows,
         .HAVE_STRERROR_R = if_not_windows,
-        .HAVE_MALLOC_H = if_windows,
-        .HAVE_MALLOC_MALLOC_H = if_not_windows,
+        .HAVE_MALLOC_H = if_windows_or_linux,
+        .HAVE_MALLOC_MALLOC_H = if_darwin,
         .HAVE_MALLOC_ZONE_STATISTICS = if_not_windows,
         .HAVE_GETPAGESIZE = if_not_windows,
         .HAVE_PTHREAD_H = if_not_windows,
@@ -549,7 +568,7 @@ fn ensureGitRepoCloned(allocator: std.mem.Allocator, clone_url: []const u8, revi
 }
 
 fn getCurrentGitRevision(allocator: std.mem.Allocator, cwd: []const u8) ![]const u8 {
-    const result = try std.ChildProcess.exec(.{ .allocator = allocator, .argv = &.{ "git", "rev-parse", "HEAD" }, .cwd = cwd });
+    const result = try std.ChildProcess.run(.{ .allocator = allocator, .argv = &.{ "git", "rev-parse", "HEAD" }, .cwd = cwd });
     allocator.free(result.stderr);
     if (result.stdout.len > 0) return result.stdout[0 .. result.stdout.len - 1]; // trim newline
     return result.stdout;
@@ -557,7 +576,7 @@ fn getCurrentGitRevision(allocator: std.mem.Allocator, cwd: []const u8) ![]const
 
 fn ensureGit(allocator: std.mem.Allocator) void {
     const argv = &[_][]const u8{ "git", "--version" };
-    const result = std.ChildProcess.exec(.{
+    const result = std.ChildProcess.run(.{
         .allocator = allocator,
         .argv = argv,
         .cwd = ".",
