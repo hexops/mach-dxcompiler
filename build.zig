@@ -46,7 +46,7 @@ pub const Options = struct {
 
     /// When building from source, which repository and revision to clone.
     source_repository: []const u8 = "https://github.com/hexops/DirectXShaderCompiler",
-    source_revision: []const u8 = "7d0f6ff2b9bbd5285ebe9fbc6e016dad682afe90", // main branch
+    source_revision: []const u8 = "c3df16e2c2e282c84ee44cdc0a705c19f2c57647", // main branch
 };
 
 pub fn link(b: *Build, step: *std.build.CompileStep, options: Options) !void {
