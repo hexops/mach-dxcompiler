@@ -1,0 +1,83 @@
+name: CI
+on:
+  workflow_run:
+    workflows: ["Draft release"]
+    types:
+      - completed
+jobs:
+  all:
+    strategy:
+      matrix:
+        target: [
+          'x86_64-linux-gnu',
+          'x86_64-linux-musl',
+          'aarch64-linux-gnu',
+          'aarch64-linux-musl',
+          'x86_64-windows-gnu',
+          'aarch64-windows-gnu',
+          'x86_64-macos',
+          'aarch64-macos',
+        ]
+        optimize: [Debug, ReleaseFast]
+        include:
+          - target: 'x86_64-linux-gnu'
+            cpu: '-Dcpu=x86_64_v2'
+          - target: 'x86_64-linux-musl'
+            cpu: '-Dcpu=x86_64_v2'
+          - target: 'x86_64-windows-gnu'
+            cpu: '-Dcpu=x86_64_v2'
+          - target: 'x86_64-macos'
+            cpu: '-Dcpu=x86_64_v2'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+      - name: Setup Zig
+        run: |
+          sudo apt install xz-utils
+          sudo sh -c 'wget -c https://pkg.machengine.org/zig/zig-linux-x86_64-0.12.0-dev.1092+68ed78775.tar.xz -O - | tar -xJ --strip-components=1 -C /usr/local/bin'
+      - name: build
+        run: zig build -Dfrom-source -Dtarget=${{ matrix.target }} -Doptimize=${{ matrix.optimize }} ${{ matrix.cpu }}
+      - name: upload
+        run: ./dev/upload-release.sh
+        env:
+          RELEASE_NAME: ${{ matrix.target }}_${{ matrix.optimize }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  msvc:
+    strategy:
+      matrix:
+        target: [
+          'x86_64-windows-msvc',
+          'x86_64-windows-msvc',
+          'aarch64-windows-msvc',
+          'aarch64-windows-msvc',
+        ]
+        optimize: [Debug, ReleaseFast]
+        node: [14, 16]
+        include:
+          - os: windows-latest
+            node: 16
+            npm: 6
+    runs-on: windows-latest
+    # We want to run on external PRs, but not on our own internal PRs as they'll be run by the push
+    # to the branch.
+    if: github.event.workflow_run.conclusion == 'success' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name != github.repository)
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+      - name: Setup Zig
+        run: |
+          $ProgressPreference = 'SilentlyContinue'
+          Invoke-WebRequest -Uri "https://pkg.machengine.org/zig/zig-windows-x86_64-0.12.0-dev.1092+68ed78775.zip" -OutFile "C:\zig.zip"
+          cd C:\
+          7z x zig.zip
+          Add-Content $env:GITHUB_PATH "C:\zig-windows-x86_64-0.12.0-dev.1092+68ed78775\"
+      - name: build
+        run: zig build -Dfrom-source -Dtarget=${{ matrix.target }} -Doptimize=${{ matrix.optimize }} ${{ matrix.cpu }}
+      - name: upload
+        run: ./dev/upload-release.sh
+        shell: bash
+        env:
+          WINDOWS: true
+          RELEASE_NAME: ${{ matrix.target }}_${{ matrix.optimize }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
