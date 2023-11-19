@@ -9,12 +9,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
       - name: Create draft
-        run: gh release create "release-$(git rev-parse --short HEAD)" --title "Automatic release of main @ $(git rev-parse --short HEAD)"
+        run: gh release create "release-$(git rev-parse --short HEAD)" --draft --title "Automatic release of main @ $(git rev-parse --short HEAD)"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-  build_all:
+      - name: Create draft
+        run: gh release edit "release-$(git rev-parse --short HEAD)" --draft=false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  all:
     needs: draft_release
     strategy:
       matrix:
@@ -41,7 +45,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
       - name: Setup Zig
         run: |
           sudo apt install xz-utils
@@ -53,7 +57,8 @@ jobs:
         env:
           RELEASE_NAME: ${{ matrix.target }}_${{ matrix.optimize }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-  build_msvc:
+  msvc:
+    needs: draft_release
     strategy:
       matrix:
         target: [
@@ -92,11 +97,15 @@ jobs:
           RELEASE_NAME: ${{ matrix.target }}_${{ matrix.optimize }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   publish:
-    needs: [build_all, build_msvc]
+    needs: [all, msvc]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
+      - name: Publish release
+        run: gh release edit "release-$(git rev-parse --short HEAD)" --draft=false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Record latest release version
         id: recorded_release_version
         # Note: we find the latest non-'update to latest binary release' commit here, which is not
@@ -105,12 +114,8 @@ jobs:
         # By doing this, we ensure any update we push would refer to the absolute latest binary
         # release even if *this* CI run is older.
         run: echo "recorded_release_version=$(git log --oneline | grep -v 'update to latest binary release' | head -n1 | cut -d " " -f1)" >> $GITHUB_ENV
-      # - name: Publish release
-      #   run: echo "TODO(build-system): gh CLI has no way to mark draft as published?"
-      #   env:
-      #     GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Checkout hexops/mach-dxcompiler repo
-        uses: actions/checkout@v2
+        uses: actions/checkout@v3
         with:
           repository: hexops/mach-dxcompiler
           token: ${{ secrets.HEXOPS_MACH_DXCOMPILER_PUSH }}
