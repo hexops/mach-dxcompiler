@@ -1,2 +1,0 @@
-@echo off
-zig ranlib %*
