@@ -54,10 +54,10 @@ jobs:
         run: zig build -Dfrom-source -Dtarget=${{ matrix.target }} -Doptimize=${{ matrix.optimize }} ${{ matrix.cpu }}
       - name: upload
         run: |
-          ZSTD_CLEVEL=22 tar -acf lib.tar.zst zig-out/lib
-          ZSTD_CLEVEL=22 tar -acf bin.tar.zst zig-out/bin
-          ZSTD_CLEVEL=22 tar -acf lib.tar.gz zig-out/lib
-          ZSTD_CLEVEL=22 tar -acf bin.tar.gz zig-out/bin
+          ZSTD_CLEVEL=19 tar -acf "$RELEASE_NAME_lib.tar.zst" zig-out/lib
+          ZSTD_CLEVEL=19 tar -acf "$RELEASE_NAME_bin.tar.zst" zig-out/bin
+          ZSTD_CLEVEL=19 tar -acf "$RELEASE_NAME_lib.tar.gz" zig-out/lib
+          ZSTD_CLEVEL=19 tar -acf "$RELEASE_NAME_bin.tar.gz" zig-out/bin
           gh release upload "release-$(git rev-parse --short HEAD)" "$RELEASE_NAME_lib.tar.zst"
           gh release upload "release-$(git rev-parse --short HEAD)" "$RELEASE_NAME_bin.tar.zst"
           gh release upload "release-$(git rev-parse --short HEAD)" "$RELEASE_NAME_lib.tar.gz"
@@ -99,10 +99,10 @@ jobs:
         run: zig build -Dfrom-source -Dtarget=${{ matrix.target }} -Doptimize=${{ matrix.optimize }} ${{ matrix.cpu }}
       - name: upload
         run: |
-          ZSTD_CLEVEL=22 tar -acf lib.tar.zst zig-out/lib
-          ZSTD_CLEVEL=22 tar -acf bin.tar.zst zig-out/bin
-          ZSTD_CLEVEL=22 tar -acf lib.tar.gz zig-out/lib
-          ZSTD_CLEVEL=22 tar -acf bin.tar.gz zig-out/bin
+          ZSTD_CLEVEL=19 tar -acf "$RELEASE_NAME_lib.tar.zst" zig-out/lib
+          ZSTD_CLEVEL=19 tar -acf "$RELEASE_NAME_bin.tar.zst" zig-out/bin
+          ZSTD_CLEVEL=19 tar -acf "$RELEASE_NAME_lib.tar.gz" zig-out/lib
+          ZSTD_CLEVEL=19 tar -acf "$RELEASE_NAME_bin.tar.gz" zig-out/bin
           gh release upload "release-$(git rev-parse --short HEAD)" "$RELEASE_NAME_lib.tar.zst"
           gh release upload "release-$(git rev-parse --short HEAD)" "$RELEASE_NAME_bin.tar.zst"
           gh release upload "release-$(git rev-parse --short HEAD)" "$RELEASE_NAME_lib.tar.gz"
