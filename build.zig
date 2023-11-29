@@ -402,17 +402,30 @@ pub fn addConfigHeaderLLVMConfig(b: *Build, target: std.zig.CrossTarget, which: 
     };
     const llvm_config_h = blk: {
         if (target.getOsTag() == .windows) {
-            if (target.getAbi() == .msvc) @panic("TODO: support *-windows-msvc targets");
-            break :blk switch (target.getCpuArch()) {
-                .x86_64 => merge(cross_platform, LLVMConfigH{
-                    .LLVM_HOST_TRIPLE = "x86_64-w64-mingw32",
-                    .LLVM_ON_WIN32 = 1,
-                }),
-                .aarch64 => merge(cross_platform, LLVMConfigH{
-                    .LLVM_HOST_TRIPLE = "aarch64-w64-mingw32",
-                    .LLVM_ON_WIN32 = 1,
-                }),
-                else => @panic("target architecture not supported"),
+            break :blk switch (target.getAbi()) {
+                .msvc => switch (target.getCpuArch()) {
+                    .x86_64 => merge(cross_platform, LLVMConfigH{
+                        .LLVM_HOST_TRIPLE = "x86_64-w64-msvc",
+                        .LLVM_ON_WIN32 = 1,
+                    }),
+                    .aarch64 => merge(cross_platform, LLVMConfigH{
+                        .LLVM_HOST_TRIPLE = "aarch64-w64-msvc",
+                        .LLVM_ON_WIN32 = 1,
+                    }),
+                    else => @panic("target architecture not supported"),
+                },
+                .gnu => switch (target.getCpuArch()) {
+                    .x86_64 => merge(cross_platform, LLVMConfigH{
+                        .LLVM_HOST_TRIPLE = "x86_64-w64-mingw32",
+                        .LLVM_ON_WIN32 = 1,
+                    }),
+                    .aarch64 => merge(cross_platform, LLVMConfigH{
+                        .LLVM_HOST_TRIPLE = "aarch64-w64-mingw32",
+                        .LLVM_ON_WIN32 = 1,
+                    }),
+                    else => @panic("target architecture not supported"),
+                },
+                else => @panic("target ABI not supported"),
             };
         } else if (target.getOsTag().isDarwin()) {
             break :blk switch (target.getCpuArch()) {
