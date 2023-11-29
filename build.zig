@@ -46,7 +46,7 @@ pub const Options = struct {
 
     /// When building from source, which repository and revision to clone.
     source_repository: []const u8 = "https://github.com/hexops/DirectXShaderCompiler",
-    source_revision: []const u8 = "c3df16e2c2e282c84ee44cdc0a705c19f2c57647", // main branch
+    source_revision: []const u8 = "c7403b886729c391f1dcebc872dfd289f6fe12d2", // main branch
 };
 
 pub fn link(b: *Build, step: *std.build.CompileStep, options: Options) !void {
@@ -678,7 +678,7 @@ fn scanSources(
     excluding_contains: []const []const u8,
 ) !void {
     const abs_dir = try std.fs.path.join(b.allocator, &.{ sdkPath("/"), rel_dir });
-    var dir = std.fs.openIterableDirAbsolute(abs_dir, .{}) catch |err| {
+    var dir = std.fs.cwd().openDir(abs_dir, .{ .iterate = true }) catch |err| {
         std.log.err("mach: error: failed to open: {s}", .{abs_dir});
         return err;
     };
