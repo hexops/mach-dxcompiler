@@ -82,9 +82,6 @@ jobs:
             node: 16
             npm: 6
     runs-on: windows-latest
-    # We want to run on external PRs, but not on our own internal PRs as they'll be run by the push
-    # to the branch.
-    if: github.event.workflow_run.conclusion == 'success' && (github.event_name == 'push' || github.event.pull_request.head.repo.full_name != github.repository)
     steps:
       - name: Checkout
         uses: actions/checkout@v3
