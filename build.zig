@@ -1,6 +1,9 @@
 const std = @import("std");
 const Build = std.Build;
 
+/// The latest binary release available at https://github.com/hexops/mach-dxcompiler/releases
+const latest_binary_release = "release-d7b308b";
+
 const log = std.log.scoped(.mach_dxcompiler);
 const prefix = "libs/DirectXShaderCompiler";
 
@@ -40,9 +43,6 @@ pub const Options = struct {
 
     /// Whether to build and install dxc.exe
     build_binary_tools: bool = false,
-
-    /// The binary release version to use from https://github.com/hexops/mach-dxcompiler/releases
-    binary_version: []const u8 = "release-d7b308b",
 
     /// When building from source, which repository and revision to clone.
     source_repository: []const u8 = "https://github.com/hexops/DirectXShaderCompiler",

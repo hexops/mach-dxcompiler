@@ -11,11 +11,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v3
       - name: Create draft
-        run: gh release create "release-$(git rev-parse --short HEAD)" --draft --title "Automatic release of main @ $(git rev-parse --short HEAD)"
+        run: |
+          export RELEASE="$(date +%Y.%m.%d)+$(git rev-parse --short HEAD).${{ github.run_attempt }}"
+          gh release create "$RELEASE" --draft --title "Automatic release of main @ $(git rev-parse --short HEAD)"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Create draft
-        run: gh release edit "release-$(git rev-parse --short HEAD)" --draft=false
+        run: |
+          export RELEASE="$(date +%Y.%m.%d)+$(git rev-parse --short HEAD).${{ github.run_attempt }}"
+          gh release edit "$RELEASE" --draft=false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   all:
@@ -54,16 +58,17 @@ jobs:
         run: zig build -Dfrom-source -Dtarget=${{ matrix.target }} -Doptimize=${{ matrix.optimize }} ${{ matrix.cpu }}
       - name: upload
         run: |
-          ZSTD_CLEVEL=19 tar -acf "${RELEASE_NAME}_lib.tar.zst" zig-out/lib
-          ZSTD_CLEVEL=19 tar -acf "${RELEASE_NAME}_bin.tar.zst" zig-out/bin
-          ZSTD_CLEVEL=19 tar -acf "${RELEASE_NAME}_lib.tar.gz" zig-out/lib
-          ZSTD_CLEVEL=19 tar -acf "${RELEASE_NAME}_bin.tar.gz" zig-out/bin
-          gh release upload "release-$(git rev-parse --short HEAD)" "${RELEASE_NAME}_lib.tar.zst"
-          gh release upload "release-$(git rev-parse --short HEAD)" "${RELEASE_NAME}_bin.tar.zst"
-          gh release upload "release-$(git rev-parse --short HEAD)" "${RELEASE_NAME}_lib.tar.gz"
-          gh release upload "release-$(git rev-parse --short HEAD)" "${RELEASE_NAME}_bin.tar.gz"
+          ZSTD_CLEVEL=19 tar -acf "${TARGET_OPT}_lib.tar.zst" zig-out/lib
+          ZSTD_CLEVEL=19 tar -acf "${TARGET_OPT}_bin.tar.zst" zig-out/bin
+          ZSTD_CLEVEL=19 tar -acf "${TARGET_OPT}_lib.tar.gz" zig-out/lib
+          ZSTD_CLEVEL=19 tar -acf "${TARGET_OPT}_bin.tar.gz" zig-out/bin
+          export RELEASE="$(date +%Y.%m.%d)+$(git rev-parse --short HEAD).${{ github.run_attempt }}"
+          gh release upload "$RELEASE" "${TARGET_OPT}_lib.tar.zst"
+          gh release upload "$RELEASE" "${TARGET_OPT}_bin.tar.zst"
+          gh release upload "$RELEASE" "${TARGET_OPT}_lib.tar.gz"
+          gh release upload "$RELEASE" "${TARGET_OPT}_bin.tar.gz"
         env:
-          RELEASE_NAME: ${{ matrix.target }}_${{ matrix.optimize }}
+          TARGET_OPT: ${{ matrix.target }}_${{ matrix.optimize }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   msvc:
     needs: draft_release
@@ -92,18 +97,19 @@ jobs:
       #   run: zig build -Dfrom-source -Dtarget=${{ matrix.target }} -Doptimize=${{ matrix.optimize }} ${{ matrix.cpu }}
       # - name: upload
       #   run: |
-      #     ZSTD_CLEVEL=19 tar -acf "${RELEASE_NAME}_lib.tar.zst" zig-out/lib
-      #     ZSTD_CLEVEL=19 tar -acf "${RELEASE_NAME}_bin.tar.zst" zig-out/bin
-      #     ZSTD_CLEVEL=19 tar -acf "${RELEASE_NAME}_lib.tar.gz" zig-out/lib
-      #     ZSTD_CLEVEL=19 tar -acf "${RELEASE_NAME}_bin.tar.gz" zig-out/bin
-      #     gh release upload "release-$(git rev-parse --short HEAD)" "${RELEASE_NAME}_lib.tar.zst"
-      #     gh release upload "release-$(git rev-parse --short HEAD)" "${RELEASE_NAME}_bin.tar.zst"
-      #     gh release upload "release-$(git rev-parse --short HEAD)" "${RELEASE_NAME}_lib.tar.gz"
-      #     gh release upload "release-$(git rev-parse --short HEAD)" "${RELEASE_NAME}_bin.tar.gz"
+      #     ZSTD_CLEVEL=19 tar -acf "${TARGET_OPT}_lib.tar.zst" zig-out/lib
+      #     ZSTD_CLEVEL=19 tar -acf "${TARGET_OPT}_bin.tar.zst" zig-out/bin
+      #     ZSTD_CLEVEL=19 tar -acf "${TARGET_OPT}_lib.tar.gz" zig-out/lib
+      #     ZSTD_CLEVEL=19 tar -acf "${TARGET_OPT}_bin.tar.gz" zig-out/bin
+      #     export RELEASE="$(date +%Y.%m.%d)+$(git rev-parse --short HEAD).${{ github.run_attempt }}"
+      #     gh release upload "$RELEASE" "${TARGET_OPT}_lib.tar.zst"
+      #     gh release upload "$RELEASE" "${TARGET_OPT}_bin.tar.zst"
+      #     gh release upload "$RELEASE" "${TARGET_OPT}_lib.tar.gz"
+      #     gh release upload "$RELEASE" "${TARGET_OPT}_bin.tar.gz"
       #   shell: bash
       #   env:
       #     WINDOWS: true
-      #     RELEASE_NAME: ${{ matrix.target }}_${{ matrix.optimize }}
+      #     TARGET_OPT: ${{ matrix.target }}_${{ matrix.optimize }}
       #     GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   publish:
     needs: [all, msvc]
@@ -112,7 +118,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v3
       - name: Publish release
-        run: gh release edit "release-$(git rev-parse --short HEAD)" --draft=false
+        run: |
+          export RELEASE="$(date +%Y.%m.%d)+$(git rev-parse --short HEAD).${{ github.run_attempt }}"
+          gh release edit "$RELEASE" --draft=false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Record latest release version
@@ -132,7 +140,8 @@ jobs:
         env:
           RELEASE_COMMIT: ${{env.recorded_release_version}}
         run: |
-          sed -i "/binary_version: \[\]const u8 =/c\            binary_version: []const u8 = \"release-$RELEASE_COMMIT\"," ./build.zig
+          export RELEASE="$(date +%Y.%m.%d)+$(git rev-parse --short HEAD).${{ github.run_attempt }}"
+          sed -i "/const latest_binary_release =/c\const latest_binary_release = \"$RELEASE\";" ./build.zig
           git config user.name 'Release automation'
           git config user.email 'wrench@hexops.com'
           git add .
