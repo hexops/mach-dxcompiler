@@ -88,23 +88,23 @@ jobs:
           cd C:\
           7z x zig.zip
           Add-Content $env:GITHUB_PATH "C:\zig-windows-x86_64-0.12.0-dev.1751+7fbbeae61\"
-      - name: build
-        run: zig build -Dfrom-source -Dtarget=${{ matrix.target }} -Doptimize=${{ matrix.optimize }} ${{ matrix.cpu }}
-      - name: upload
-        run: |
-          ZSTD_CLEVEL=19 tar -acf "${RELEASE_NAME}_lib.tar.zst" zig-out/lib
-          ZSTD_CLEVEL=19 tar -acf "${RELEASE_NAME}_bin.tar.zst" zig-out/bin
-          ZSTD_CLEVEL=19 tar -acf "${RELEASE_NAME}_lib.tar.gz" zig-out/lib
-          ZSTD_CLEVEL=19 tar -acf "${RELEASE_NAME}_bin.tar.gz" zig-out/bin
-          gh release upload "release-$(git rev-parse --short HEAD)" "${RELEASE_NAME}_lib.tar.zst"
-          gh release upload "release-$(git rev-parse --short HEAD)" "${RELEASE_NAME}_bin.tar.zst"
-          gh release upload "release-$(git rev-parse --short HEAD)" "${RELEASE_NAME}_lib.tar.gz"
-          gh release upload "release-$(git rev-parse --short HEAD)" "${RELEASE_NAME}_bin.tar.gz"
-        shell: bash
-        env:
-          WINDOWS: true
-          RELEASE_NAME: ${{ matrix.target }}_${{ matrix.optimize }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      # - name: build
+      #   run: zig build -Dfrom-source -Dtarget=${{ matrix.target }} -Doptimize=${{ matrix.optimize }} ${{ matrix.cpu }}
+      # - name: upload
+      #   run: |
+      #     ZSTD_CLEVEL=19 tar -acf "${RELEASE_NAME}_lib.tar.zst" zig-out/lib
+      #     ZSTD_CLEVEL=19 tar -acf "${RELEASE_NAME}_bin.tar.zst" zig-out/bin
+      #     ZSTD_CLEVEL=19 tar -acf "${RELEASE_NAME}_lib.tar.gz" zig-out/lib
+      #     ZSTD_CLEVEL=19 tar -acf "${RELEASE_NAME}_bin.tar.gz" zig-out/bin
+      #     gh release upload "release-$(git rev-parse --short HEAD)" "${RELEASE_NAME}_lib.tar.zst"
+      #     gh release upload "release-$(git rev-parse --short HEAD)" "${RELEASE_NAME}_bin.tar.zst"
+      #     gh release upload "release-$(git rev-parse --short HEAD)" "${RELEASE_NAME}_lib.tar.gz"
+      #     gh release upload "release-$(git rev-parse --short HEAD)" "${RELEASE_NAME}_bin.tar.gz"
+      #   shell: bash
+      #   env:
+      #     WINDOWS: true
+      #     RELEASE_NAME: ${{ matrix.target }}_${{ matrix.optimize }}
+      #     GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   publish:
     needs: [all, msvc]
     runs-on: ubuntu-latest
