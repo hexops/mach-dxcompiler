@@ -33,8 +33,8 @@ jobs:
           'aarch64-linux-musl',
           'x86_64-windows-gnu',
           'aarch64-windows-gnu',
-          'x86_64-macos',
-          'aarch64-macos',
+          'x86_64-macos-none',
+          'aarch64-macos-none',
         ]
         optimize: [Debug, ReleaseFast]
         include:
