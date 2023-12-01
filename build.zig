@@ -208,8 +208,6 @@ fn linkFromSource(b: *Build, step: *std.build.CompileStep, options: Options) !vo
             .rel_dirs = &.{prefix ++ "/lib/Support/Windows"},
             .excluding_contains = &.{".inc.cpp"},
         });
-        machdxc.linkSystemLibrary("ole32");
-        machdxc.linkSystemLibrary("oleaut32");
         machdxc.linkSystemLibrary("version");
     } else {
         machdxc.defineCMacro("LLVM_ON_UNIX", "1");
@@ -223,7 +221,7 @@ fn linkFromSource(b: *Build, step: *std.build.CompileStep, options: Options) !vo
 
     if (options.install_libs) b.installArtifact(machdxc);
 
-    machdxc.linkLibCpp();
+    linkMachDxcDependencies(machdxc);
     machdxc.addIncludePath(.{ .path = "src" });
 
     // TODO: investigate SSE2 #define / cmake option for CPU target
@@ -262,7 +260,15 @@ fn linkFromSource(b: *Build, step: *std.build.CompileStep, options: Options) !vo
     step.addIncludePath(.{ .path = "src" });
 }
 
-pub fn linkFromBinary(b: *Build, step: *std.build.CompileStep, options: Options) !void {
+fn linkMachDxcDependencies(step: *std.build.Step.Compile) void {
+    step.linkLibCpp();
+    if (step.target.getOsTag() == .windows) {
+        step.linkSystemLibrary("ole32");
+        step.linkSystemLibrary("oleaut32");
+    }
+}
+
+fn linkFromBinary(b: *Build, step: *std.build.CompileStep, options: Options) !void {
     // Add a build step to download binaries. This being a custom build step ensures it only
     // downloads if needed, and that and that e.g. if you are running a different
     // `zig build <step>` it doesn't always just download the binaries.
@@ -272,12 +278,12 @@ pub fn linkFromBinary(b: *Build, step: *std.build.CompileStep, options: Options)
     const cache_dir = try binaryCacheDirPath(b, options, step);
     step.addLibraryPath(.{ .path = cache_dir });
     step.linkSystemLibrary("machdxc");
-    step.linkLibCpp();
+    linkMachDxcDependencies(step);
 
     step.addIncludePath(.{ .path = "src" });
 }
 
-pub fn addConfigHeaders(b: *Build, step: *std.build.CompileStep) void {
+fn addConfigHeaders(b: *Build, step: *std.build.CompileStep) void {
     // /tools/clang/include/clang/Config/config.h.cmake
     step.addConfigHeader(b.addConfigHeader(
         .{
@@ -361,7 +367,7 @@ pub fn addConfigHeaders(b: *Build, step: *std.build.CompileStep) void {
     ));
 }
 
-pub fn addIncludes(step: *std.build.CompileStep) void {
+fn addIncludes(step: *std.build.CompileStep) void {
     step.addIncludePath(.{ .path = prefix ++ "/external/DIA/include" });
     // TODO: replace generated-include with logic to actually generate this code
     step.addIncludePath(.{ .path = "generated-include/" });
@@ -392,7 +398,7 @@ pub fn addIncludes(step: *std.build.CompileStep) void {
 
 // /include/llvm/Config/llvm-config.h.cmake
 // /include/llvm/Config/config.h.cmake (derives llvm-config.h.cmake)
-pub fn addConfigHeaderLLVMConfig(b: *Build, target: std.zig.CrossTarget, which: anytype) *std.Build.Step.ConfigHeader {
+fn addConfigHeaderLLVMConfig(b: *Build, target: std.zig.CrossTarget, which: anytype) *std.Build.Step.ConfigHeader {
     // Note: LLVM_HOST_TRIPLEs can be found by running $ llc --version | grep Default
     // Note: arm64 is an alias for aarch64, we always use aarch64 over arm64.
     const cross_platform = .{
@@ -744,7 +750,7 @@ fn scanSources(
 }
 
 // Merge struct types A and B
-pub fn Merge(comptime a: type, comptime b: type) type {
+fn Merge(comptime a: type, comptime b: type) type {
     const a_fields = @typeInfo(a).Struct.fields;
     const b_fields = @typeInfo(b).Struct.fields;
 
@@ -759,7 +765,7 @@ pub fn Merge(comptime a: type, comptime b: type) type {
 }
 
 // Merge struct values A and B
-pub fn merge(a: anytype, b: anytype) Merge(@TypeOf(a), @TypeOf(b)) {
+fn merge(a: anytype, b: anytype) Merge(@TypeOf(a), @TypeOf(b)) {
     var merged: Merge(@TypeOf(a), @TypeOf(b)) = undefined;
     inline for (@typeInfo(@TypeOf(merged)).Struct.fields) |f| {
         if (@hasField(@TypeOf(a), f.name)) @field(merged, f.name) = @field(a, f.name);
@@ -823,7 +829,7 @@ const DownloadBinaryStep = struct {
     step: std.build.Step,
     b: *std.build.Builder,
 
-    pub fn init(b: *std.build.Builder, target_step: *std.build.Step.Compile, options: Options) *DownloadBinaryStep {
+    fn init(b: *std.build.Builder, target_step: *std.build.Step.Compile, options: Options) *DownloadBinaryStep {
         const download_step = b.allocator.create(DownloadBinaryStep) catch unreachable;
         download_step.* = .{
             .target_step = target_step,
@@ -996,7 +1002,7 @@ fn dirExists(path: []const u8) bool {
 
 const hex_charset = "0123456789abcdef";
 
-pub fn hex64(x: u64) [16]u8 {
+fn hex64(x: u64) [16]u8 {
     var result: [16]u8 = undefined;
     var i: usize = 0;
     while (i < 8) : (i += 1) {
