@@ -58,10 +58,10 @@ jobs:
         run: zig build -Dfrom-source -Dtarget=${{ matrix.target }} -Doptimize=${{ matrix.optimize }} ${{ matrix.cpu }}
       - name: upload
         run: |
-          ZSTD_CLEVEL=19 tar -acf "${TARGET_OPT}_lib.tar.zst" zig-out/lib
-          ZSTD_CLEVEL=19 tar -acf "${TARGET_OPT}_bin.tar.zst" zig-out/bin
-          ZSTD_CLEVEL=19 tar -acf "${TARGET_OPT}_lib.tar.gz" zig-out/lib
-          ZSTD_CLEVEL=19 tar -acf "${TARGET_OPT}_bin.tar.gz" zig-out/bin
+          ZSTD_CLEVEL=19 tar -acf "${TARGET_OPT}_lib.tar.zst" -C zig-out/lib .
+          ZSTD_CLEVEL=19 tar -acf "${TARGET_OPT}_bin.tar.zst" -C zig-out/bin .
+          ZSTD_CLEVEL=19 tar -acf "${TARGET_OPT}_lib.tar.gz" -C zig-out/lib .
+          ZSTD_CLEVEL=19 tar -acf "${TARGET_OPT}_bin.tar.gz" -C zig-out/bin .
           export RELEASE="$(date -u +%Y.%m.%d)+$(git rev-parse --short HEAD).${{ github.run_attempt }}"
           gh release upload "$RELEASE" "${TARGET_OPT}_lib.tar.zst"
           gh release upload "$RELEASE" "${TARGET_OPT}_bin.tar.zst"
@@ -97,10 +97,10 @@ jobs:
       #   run: zig build -Dfrom-source -Dtarget=${{ matrix.target }} -Doptimize=${{ matrix.optimize }} ${{ matrix.cpu }}
       # - name: upload
       #   run: |
-      #     ZSTD_CLEVEL=19 tar -acf "${TARGET_OPT}_lib.tar.zst" zig-out/lib
-      #     ZSTD_CLEVEL=19 tar -acf "${TARGET_OPT}_bin.tar.zst" zig-out/bin
-      #     ZSTD_CLEVEL=19 tar -acf "${TARGET_OPT}_lib.tar.gz" zig-out/lib
-      #     ZSTD_CLEVEL=19 tar -acf "${TARGET_OPT}_bin.tar.gz" zig-out/bin
+      #     ZSTD_CLEVEL=19 tar -acf "${TARGET_OPT}_lib.tar.zst" -C zig-out/lib .
+      #     ZSTD_CLEVEL=19 tar -acf "${TARGET_OPT}_bin.tar.zst" -C zig-out/bin .
+      #     ZSTD_CLEVEL=19 tar -acf "${TARGET_OPT}_lib.tar.gz" -C zig-out/lib .
+      #     ZSTD_CLEVEL=19 tar -acf "${TARGET_OPT}_bin.tar.gz" -C zig-out/bin .
       #     export RELEASE="$(date -u +%Y.%m.%d)+$(git rev-parse --short HEAD).${{ github.run_attempt }}"
       #     gh release upload "$RELEASE" "${TARGET_OPT}_lib.tar.zst"
       #     gh release upload "$RELEASE" "${TARGET_OPT}_bin.tar.zst"
