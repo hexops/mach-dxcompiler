@@ -13,7 +13,7 @@ jobs:
       - name: Create draft
         run: |
           export RELEASE="$(date -u +%Y.%m.%d)+$(git rev-parse --short HEAD).${{ github.run_attempt }}"
-          gh release create "$RELEASE" --draft --title "RELEASE"
+          gh release create "$RELEASE" --draft --title "$RELEASE"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Create draft
