@@ -270,9 +270,7 @@ pub fn linkFromBinary(b: *Build, step: *std.build.CompileStep, options: Options)
     step.step.dependOn(&download_step.step);
 
     const cache_dir = try binaryCacheDirPath(b, options, step);
-    // TODO: remove this
-    // step.addLibraryPath(.{ .path = cache_dir });
-    step.addLibraryPath(.{ .path = try std.fs.path.join(b.allocator, &.{ cache_dir, "lib" }) });
+    step.addLibraryPath(.{ .path = cache_dir });
     step.linkSystemLibrary("machdxc");
     step.linkLibCpp();
 
@@ -878,16 +876,12 @@ const DownloadBinaryStep = struct {
             "_lib",
             ".tar.zst",
         });
-        _ = download_url;
 
         try downloadExtractTarball(
             b.allocator,
             "", // tmp_dir_root
             try std.fs.openDirAbsolute(cache_dir, .{}),
-            // TODO: remove this
-            "https://github.com/hexops/mach-dxcompiler/releases/download/2023.11.30+a451866.3/aarch64-macos_ReleaseFast_lib.tar.zst",
-            // "https://objects.githubusercontent.com/github-production-release-asset-2e65be/692567406/45e95a9a-a835-4240-ae58-4eb62c94b250?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIAIWNJYAX4CSVEH53A%2F20231201%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20231201T184429Z&X-Amz-Expires=300&X-Amz-Signature=a34c3c20be26491fe48d98ffd25a8de9fdd0ac04f1cec1d7270b27c18ef509b8&X-Amz-SignedHeaders=host&actor_id=0&key_id=0&repo_id=692567406&response-content-disposition=attachment%3B%20filename%3Daarch64-macos_ReleaseFast_lib.tar.zst&response-content-type=application%2Foctet-stream",
-            // download_url,
+            download_url,
             ZstdWrapper,
         );
     }
