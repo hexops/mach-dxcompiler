@@ -10,7 +10,7 @@ const prefix = "libs/DirectXShaderCompiler";
 pub fn build(b: *Build) !void {
     const optimize = b.standardOptimizeOption(.{});
     const target = b.standardTargetOptions(.{});
-    const from_source = b.option(bool, "from-source", "Build DXC from source (large C++ codebase)") orelse false;
+    const from_source = b.option(bool, "from-source", "Build dxcompiler from source (large C++ codebase)") orelse false;
 
     // Zig bindings
     const mach_dxcompiler = b.addModule("mach-dxcompiler", .{
@@ -65,21 +65,21 @@ pub fn link(b: *Build, step: *std.build.CompileStep, options: Options) !void {
 fn linkFromSource(b: *Build, step: *std.build.CompileStep, options: Options) !void {
     try ensureGitRepoCloned(b.allocator, options.source_repository, options.source_revision, sdkPath("/libs/DirectXShaderCompiler"));
 
-    const machdxc = b.addStaticLibrary(.{
-        .name = "machdxc",
+    const lib = b.addStaticLibrary(.{
+        .name = "machdxcompiler",
         .root_source_file = b.addWriteFiles().add("empty.c", ""),
         .optimize = options.optimize,
         .target = step.target,
     });
-    b.installArtifact(machdxc);
-    if (options.install_libs) b.installArtifact(machdxc);
-    machdxc.addCSourceFile(.{
+    b.installArtifact(lib);
+    if (options.install_libs) b.installArtifact(lib);
+    lib.addCSourceFile(.{
         .file = .{ .path = "src/mach_dxc.cpp" },
         .flags = &.{
             "-fms-extensions", // __uuidof and friends (on non-windows targets)
         },
     });
-    if (machdxc.target.getOsTag() != .windows) machdxc.defineCMacro("HAVE_DLFCN_H", "1");
+    if (lib.target.getOsTag() != .windows) lib.defineCMacro("HAVE_DLFCN_H", "1");
 
     const debug_symbols = false; // TODO: build option
     var cflags = std.ArrayList([]const u8).init(b.allocator);
@@ -101,9 +101,9 @@ fn linkFromSource(b: *Build, step: *std.build.CompileStep, options: Options) !vo
     try cflags.appendSlice(base_flags);
     try cppflags.appendSlice(base_flags);
 
-    addConfigHeaders(b, machdxc);
-    addIncludes(machdxc);
-    try appendLangScannedSources(b, machdxc, .{
+    addConfigHeaders(b, lib);
+    addIncludes(lib);
+    try appendLangScannedSources(b, lib, .{
         .cflags = cflags.items,
         .cppflags = cppflags.items,
         .rel_dirs = &.{
@@ -199,19 +199,19 @@ fn linkFromSource(b: *Build, step: *std.build.CompileStep, options: Options) !vo
             "PluginLoader.cpp",
         },
     });
-    machdxc.defineCMacro("NDEBUG", ""); // disable assertions
-    if (machdxc.target.getOsTag() == .windows) {
-        machdxc.defineCMacro("LLVM_ON_WIN32", "1");
-        try appendLangScannedSources(b, machdxc, .{
+    lib.defineCMacro("NDEBUG", ""); // disable assertions
+    if (lib.target.getOsTag() == .windows) {
+        lib.defineCMacro("LLVM_ON_WIN32", "1");
+        try appendLangScannedSources(b, lib, .{
             .cflags = cflags.items,
             .cppflags = cppflags.items,
             .rel_dirs = &.{prefix ++ "/lib/Support/Windows"},
             .excluding_contains = &.{".inc.cpp"},
         });
-        machdxc.linkSystemLibrary("version");
+        lib.linkSystemLibrary("version");
     } else {
-        machdxc.defineCMacro("LLVM_ON_UNIX", "1");
-        try appendLangScannedSources(b, machdxc, .{
+        lib.defineCMacro("LLVM_ON_UNIX", "1");
+        try appendLangScannedSources(b, lib, .{
             .cflags = cflags.items,
             .cppflags = cppflags.items,
             .rel_dirs = &.{prefix ++ "/lib/Support/Unix"},
@@ -219,10 +219,10 @@ fn linkFromSource(b: *Build, step: *std.build.CompileStep, options: Options) !vo
         });
     }
 
-    if (options.install_libs) b.installArtifact(machdxc);
+    if (options.install_libs) b.installArtifact(lib);
 
-    linkMachDxcDependencies(machdxc);
-    machdxc.addIncludePath(.{ .path = "src" });
+    linkMachDxcDependencies(lib);
+    lib.addIncludePath(.{ .path = "src" });
 
     // TODO: investigate SSE2 #define / cmake option for CPU target
     //
@@ -253,10 +253,10 @@ fn linkFromSource(b: *Build, step: *std.build.CompileStep, options: Options) !vo
             .excluding_contains = &.{},
         });
         b.installArtifact(dxc_exe);
-        dxc_exe.linkLibrary(machdxc);
+        dxc_exe.linkLibrary(lib);
     }
 
-    step.linkLibrary(machdxc);
+    step.linkLibrary(lib);
     step.addIncludePath(.{ .path = "src" });
 }
 
@@ -277,7 +277,7 @@ fn linkFromBinary(b: *Build, step: *std.build.CompileStep, options: Options) !vo
 
     const cache_dir = try binaryCacheDirPath(b, options, step);
     step.addLibraryPath(.{ .path = cache_dir });
-    step.linkSystemLibrary("machdxc");
+    step.linkSystemLibrary("machdxcompiler");
     linkMachDxcDependencies(step);
 
     step.addIncludePath(.{ .path = "src" });
@@ -409,7 +409,7 @@ fn addConfigHeaderLLVMConfig(b: *Build, target: std.zig.CrossTarget, which: anyt
         .LLVM_VERSION_MAJOR = 3,
         .LLVM_VERSION_MINOR = 7,
         .LLVM_VERSION_PATCH = 0,
-        .LLVM_VERSION_STRING = "3.7-v1.4.0.2274-1812-machdxc",
+        .LLVM_VERSION_STRING = "3.7-v1.4.0.2274-1812-machdxcompiler",
     };
 
     const LLVMConfigH = struct {
