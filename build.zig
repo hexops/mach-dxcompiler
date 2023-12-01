@@ -41,6 +41,10 @@ pub const Options = struct {
     /// Whether to build dxcompiler from source or not.
     from_source: bool = false,
 
+    /// When building from source, which optimize mode to build.
+    /// When using a prebuilt binary, which optimize mode to download.
+    optimize: std.builtin.OptimizeMode = .ReleaseFast,
+
     /// Whether to build and install dxc.exe
     build_binary_tools: bool = false,
 
@@ -64,7 +68,7 @@ fn linkFromSource(b: *Build, step: *std.build.CompileStep, options: Options) !vo
     const machdxc = b.addStaticLibrary(.{
         .name = "machdxc",
         .root_source_file = b.addWriteFiles().add("empty.c", ""),
-        .optimize = step.optimize,
+        .optimize = options.optimize,
         .target = step.target,
     });
     b.installArtifact(machdxc);
@@ -231,7 +235,7 @@ fn linkFromSource(b: *Build, step: *std.build.CompileStep, options: Options) !vo
         const dxc_exe = b.addExecutable(.{
             .name = "dxc",
             .root_source_file = b.addWriteFiles().add("empty.c", ""),
-            .optimize = step.optimize,
+            .optimize = options.optimize,
             .target = step.target,
         });
         dxc_exe.addCSourceFile(.{
@@ -259,10 +263,20 @@ fn linkFromSource(b: *Build, step: *std.build.CompileStep, options: Options) !vo
 }
 
 pub fn linkFromBinary(b: *Build, step: *std.build.CompileStep, options: Options) !void {
-    _ = options;
-    _ = step;
-    _ = b;
-    // TODO
+    // Add a build step to download binaries. This being a custom build step ensures it only
+    // downloads if needed, and that and that e.g. if you are running a different
+    // `zig build <step>` it doesn't always just download the binaries.
+    var download_step = DownloadBinaryStep.init(b, step, options);
+    step.step.dependOn(&download_step.step);
+
+    const cache_dir = try binaryCacheDirPath(b, options, step);
+    // TODO: remove this
+    // step.addLibraryPath(.{ .path = cache_dir });
+    step.addLibraryPath(.{ .path = try std.fs.path.join(b.allocator, &.{ cache_dir, "lib" }) });
+    step.linkSystemLibrary("machdxc");
+    step.linkLibCpp();
+
+    step.addIncludePath(.{ .path = "src" });
 }
 
 pub fn addConfigHeaders(b: *Build, step: *std.build.CompileStep) void {
@@ -762,4 +776,244 @@ fn sdkPath(comptime suffix: []const u8) []const u8 {
         const root_dir = std.fs.path.dirname(@src().file) orelse ".";
         break :blk root_dir ++ suffix;
     };
+}
+
+// ------------------------------------------
+// Binary download logic
+// ------------------------------------------
+const project_name = "dxcompiler";
+
+var download_mutex = std.Thread.Mutex{};
+
+fn binaryZigTriple(arena: std.mem.Allocator, step: *std.build.Step.Compile) ![]const u8 {
+    // Craft a zig_triple string that we will use to create the binary download URL. Remove OS
+    // version range / glibc version from triple, as we don't include that in our download URL.
+    var binary_target = std.zig.CrossTarget.fromTarget(step.target_info.target);
+    binary_target.os_version_min = .{ .none = undefined };
+    binary_target.os_version_max = .{ .none = undefined };
+    binary_target.glibc_version = null;
+    return try binary_target.zigTriple(arena);
+}
+
+fn binaryOptimizeMode(options: Options) []const u8 {
+    return switch (options.optimize) {
+        .Debug => "Debug",
+        // All Release* are mapped to ReleaseFast, as we only provide ReleaseFast and Debug binaries.
+        .ReleaseSafe => "ReleaseFast",
+        .ReleaseFast => "ReleaseFast",
+        .ReleaseSmall => "ReleaseFast",
+    };
+}
+
+fn binaryCacheDirPath(b: *std.build.Builder, options: Options, step: *std.build.Step.Compile) ![]const u8 {
+    // Global Mach project cache directory, e.g. $HOME/.cache/zig/mach/<project_name>
+    const project_cache_dir_rel = try b.global_cache_root.join(b.allocator, &.{ "mach", project_name });
+
+    // Release-specific cache directory, e.g. $HOME/.cache/zig/mach/<project_name>/<latest_binary_release>/<zig_triple>/<optimize>
+    // where we will download the binary release to.
+    return try std.fs.path.join(b.allocator, &.{
+        project_cache_dir_rel,
+        latest_binary_release,
+        try binaryZigTriple(b.allocator, step),
+        binaryOptimizeMode(options),
+    });
+}
+
+const DownloadBinaryStep = struct {
+    target_step: *std.build.Step.Compile,
+    options: Options,
+    step: std.build.Step,
+    b: *std.build.Builder,
+
+    pub fn init(b: *std.build.Builder, target_step: *std.build.Step.Compile, options: Options) *DownloadBinaryStep {
+        const download_step = b.allocator.create(DownloadBinaryStep) catch unreachable;
+        download_step.* = .{
+            .target_step = target_step,
+            .options = options,
+            .step = std.build.Step.init(.{
+                .id = .custom,
+                .name = "download",
+                .owner = b,
+                .makeFn = &make,
+            }),
+            .b = b,
+        };
+        return download_step;
+    }
+
+    fn make(step_ptr: *std.build.Step, prog_node: *std.Progress.Node) anyerror!void {
+        _ = prog_node;
+        const download_step = @fieldParentPtr(DownloadBinaryStep, "step", step_ptr);
+        const b = download_step.b;
+        const step = download_step.target_step;
+        const options = download_step.options;
+
+        // Zig will run build steps in parallel if possible, so if there were two invocations of
+        // link() then this function would be called in parallel. We're manipulating the FS here
+        // and so need to prevent that.
+        download_mutex.lock();
+        defer download_mutex.unlock();
+
+        // Check if we've already downloaded binaries to the cache dir
+        const cache_dir = try binaryCacheDirPath(b, options, step);
+        if (dirExists(cache_dir)) {
+            // Nothing to do.
+            return;
+        }
+        std.fs.cwd().makePath(cache_dir) catch |err| {
+            log.err("unable to create cache dir '{s}': {s}", .{ cache_dir, @errorName(err) });
+            return error.DownloadFailed;
+        };
+
+        // Compose the download URL, e.g.
+        // https://github.com/hexops/mach-dxcompiler/releases/download/2023.11.30%2Ba451866.3/aarch64-linux-gnu_Debug_bin.tar.gz
+        const download_url = try std.mem.concat(b.allocator, u8, &.{
+            "https://github.com",
+            "/hexops/mach-" ++ project_name ++ "/releases/download/",
+            latest_binary_release,
+            "/",
+            try binaryZigTriple(b.allocator, step),
+            "_",
+            binaryOptimizeMode(options),
+            "_lib",
+            ".tar.zst",
+        });
+        _ = download_url;
+
+        try downloadExtractTarball(
+            b.allocator,
+            "", // tmp_dir_root
+            try std.fs.openDirAbsolute(cache_dir, .{}),
+            // TODO: remove this
+            "https://github.com/hexops/mach-dxcompiler/releases/download/2023.11.30+a451866.3/aarch64-macos_ReleaseFast_lib.tar.zst",
+            // "https://objects.githubusercontent.com/github-production-release-asset-2e65be/692567406/45e95a9a-a835-4240-ae58-4eb62c94b250?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Credential=AKIAIWNJYAX4CSVEH53A%2F20231201%2Fus-east-1%2Fs3%2Faws4_request&X-Amz-Date=20231201T184429Z&X-Amz-Expires=300&X-Amz-Signature=a34c3c20be26491fe48d98ffd25a8de9fdd0ac04f1cec1d7270b27c18ef509b8&X-Amz-SignedHeaders=host&actor_id=0&key_id=0&repo_id=692567406&response-content-disposition=attachment%3B%20filename%3Daarch64-macos_ReleaseFast_lib.tar.zst&response-content-type=application%2Foctet-stream",
+            // download_url,
+            ZstdWrapper,
+        );
+    }
+};
+
+// due to slight differences in the API of std.compress.(gzip|xz) and std.compress.zstd, zstd is
+// wrapped for generic use in unpackTarballCompressed: see github.com/ziglang/zig/issues/14739
+const ZstdWrapper = struct {
+    fn DecompressType(comptime T: type) type {
+        return error{}!std.compress.zstd.DecompressStream(T, .{});
+    }
+
+    fn decompress(allocator: std.mem.Allocator, reader: anytype) DecompressType(@TypeOf(reader)) {
+        return std.compress.zstd.decompressStream(allocator, reader);
+    }
+};
+
+fn downloadExtractTarball(
+    arena: std.mem.Allocator,
+    tmp_dir_root: []const u8,
+    out_dir: std.fs.Dir,
+    url: []const u8,
+    comptime Compression: type,
+) !void {
+    log.info("downloading {s}..\n", .{url});
+    const gpa = arena;
+
+    // Create a tmp directory
+    const rand_int = std.crypto.random.int(u64);
+    const tmp_dir_sub_path = "tmp" ++ std.fs.path.sep_str ++ hex64(rand_int);
+    const tmp_dir_path = try std.fs.path.join(arena, &.{ tmp_dir_root, tmp_dir_sub_path });
+    var tmp_dir = blk: {
+        const dir = std.fs.cwd().makeOpenPath(tmp_dir_path, .{ .iterate = true }) catch |err| {
+            log.err("unable to create temporary directory '{s}': {s}", .{ tmp_dir_path, @errorName(err) });
+            return error.FetchFailed;
+        };
+        break :blk dir;
+    };
+    defer tmp_dir.close();
+
+    // Download the file into the tmp directory.
+    const download_path = try std.fs.path.join(arena, &.{ tmp_dir_path, "download" });
+    const download_file = try std.fs.cwd().createFile(download_path, .{});
+    defer download_file.close();
+    var client: std.http.Client = .{ .allocator = gpa };
+    defer client.deinit();
+    var fetch_res = try client.fetch(arena, .{
+        .location = .{ .url = url },
+        .response_strategy = .{ .file = download_file },
+    });
+    if (fetch_res.status.class() != .success) {
+        log.err("unable to fetch: HTTP {}", .{fetch_res.status});
+        fetch_res.deinit();
+        return error.FetchFailed;
+    }
+    fetch_res.deinit();
+    const downloaded_file = try std.fs.cwd().openFile(download_path, .{});
+    defer downloaded_file.close();
+
+    // Decompress tarball
+    var br = std.io.bufferedReaderSize(std.crypto.tls.max_ciphertext_record_len, downloaded_file.reader());
+    var decompress = Compression.decompress(gpa, br.reader()) catch |err| {
+        log.err("unable to decompress downloaded tarball: {s}", .{@errorName(err)});
+        return error.DecompressFailed;
+    };
+    defer decompress.deinit();
+
+    // Unpack tarball
+    var diagnostics: std.tar.Options.Diagnostics = .{ .allocator = gpa };
+    defer diagnostics.deinit();
+    std.tar.pipeToFileSystem(out_dir, decompress.reader(), .{
+        .diagnostics = &diagnostics,
+        .strip_components = 1,
+        // TODO: we would like to set this to executable_bit_only, but two
+        // things need to happen before that:
+        // 1. the tar implementation needs to support it
+        // 2. the hashing algorithm here needs to support detecting the is_executable
+        //    bit on Windows from the ACLs (see the isExecutable function).
+        .mode_mode = .ignore,
+        .exclude_empty_directories = true,
+    }) catch |err| {
+        log.err("unable to unpack tarball: {s}", .{@errorName(err)});
+        return error.UnpackFailed;
+    };
+    if (diagnostics.errors.items.len > 0) {
+        const notes_len: u32 = @intCast(diagnostics.errors.items.len);
+        log.err("unable to unpack tarball(2)", .{});
+        for (diagnostics.errors.items, notes_len..) |item, note_i| {
+            _ = note_i;
+
+            switch (item) {
+                .unable_to_create_sym_link => |info| {
+                    log.err("unable to create symlink from '{s}' to '{s}': {s}", .{ info.file_name, info.link_name, @errorName(info.code) });
+                },
+                .unable_to_create_file => |info| {
+                    log.err("unable to create file '{s}': {s}", .{ info.file_name, @errorName(info.code) });
+                },
+                .unsupported_file_type => |info| {
+                    log.err("file '{s}' has unsupported type '{c}'", .{ info.file_name, @intFromEnum(info.file_type) });
+                },
+            }
+        }
+        return error.UnpackFailed;
+    }
+}
+
+fn dirExists(path: []const u8) bool {
+    var dir = std.fs.openDirAbsolute(path, .{}) catch return false;
+    dir.close();
+    return true;
+}
+
+const hex_charset = "0123456789abcdef";
+
+pub fn hex64(x: u64) [16]u8 {
+    var result: [16]u8 = undefined;
+    var i: usize = 0;
+    while (i < 8) : (i += 1) {
+        const byte = @as(u8, @truncate(x >> @as(u6, @intCast(8 * i))));
+        result[i * 2 + 0] = hex_charset[byte >> 4];
+        result[i * 2 + 1] = hex_charset[byte & 15];
+    }
+    return result;
+}
+
+test hex64 {
+    const s = "[" ++ hex64(0x12345678_abcdef00) ++ "]";
+    try std.testing.expectEqualStrings("[00efcdab78563412]", s);
 }
