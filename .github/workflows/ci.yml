@@ -44,7 +44,7 @@ jobs:
             cpu: '-Dcpu=x86_64_v2'
           - target: 'x86_64-windows-gnu'
             cpu: '-Dcpu=x86_64_v2'
-          - target: 'x86_64-macos'
+          - target: 'x86_64-macos-none'
             cpu: '-Dcpu=x86_64_v2'
     runs-on: ubuntu-latest
     steps:
