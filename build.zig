@@ -45,12 +45,16 @@ pub const Options = struct {
     /// When using a prebuilt binary, which optimize mode to download.
     optimize: std.builtin.OptimizeMode = .ReleaseFast,
 
+    /// When building from source, whether to produce detailed debug symbols
+    /// or not (g0 level). These can increase the binary size considerably
+    debug_symbols: bool = false,
+
     /// Whether to build and install dxc.exe
     build_binary_tools: bool = false,
 
     /// When building from source, which repository and revision to clone.
     source_repository: []const u8 = "https://github.com/hexops/DirectXShaderCompiler",
-    source_revision: []const u8 = "b3043933e69ad45755ac14e97d11cea185774bbc", // main branch
+    source_revision: []const u8 = "7a0138d6eab5ce712e6dc70d3dc200eb2193574f", // main branch
 };
 
 pub fn link(b: *Build, step: *std.build.CompileStep, options: Options) !void {
@@ -81,10 +85,13 @@ fn linkFromSource(b: *Build, step: *std.build.CompileStep, options: Options) !vo
     });
     if (lib.target.getOsTag() != .windows) lib.defineCMacro("HAVE_DLFCN_H", "1");
 
-    const debug_symbols = false; // TODO: build option
+    // Microsoft does some shit.
+    lib.disable_sanitize_c = true;
+    lib.sanitize_thread = false; // sometimes in parallel, too.
+
     var cflags = std.ArrayList([]const u8).init(b.allocator);
     var cppflags = std.ArrayList([]const u8).init(b.allocator);
-    if (!debug_symbols) {
+    if (!options.debug_symbols) {
         try cflags.append("-g0");
         try cppflags.append("-g0");
     }
@@ -185,9 +192,6 @@ fn linkFromSource(b: *Build, step: *std.build.CompileStep, options: Options) !vo
             // tools/clang/tools/libclang/CMakeLists.txt
             "ARCMigrate.cpp",
             "BuildSystem.cpp",
-
-            // tools/clang/tools/dxcompiler/CMakeLists.txt
-            "dxillib.cpp",
 
             // lib/Transforms/Vectorize/CMakeLists.txt
             "BBVectorize.cpp",
