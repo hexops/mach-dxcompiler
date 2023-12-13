@@ -259,8 +259,8 @@ fn linkFromSource(b: *Build, step: *std.build.CompileStep, options: Options) !vo
         b.installArtifact(dxc_exe);
         dxc_exe.linkLibrary(lib);
 
-        if (dxc_exe.target.getOsTag() == .windows and dxc_exe.target.getCpuArch() == .aarch64) {
-            // aarch64-windows must be built with LTO disabled due to:
+        if (dxc_exe.target.getOsTag() == .windows) {
+            // windows must be built with LTO disabled due to:
             // https://github.com/ziglang/zig/issues/15958
             dxc_exe.want_lto = false;
         }
