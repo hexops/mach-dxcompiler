@@ -85,6 +85,11 @@ fn linkFromSource(b: *Build, step: *std.build.CompileStep, options: Options) !vo
     });
     if (lib.target.getOsTag() != .windows) lib.defineCMacro("HAVE_DLFCN_H", "1");
 
+    // The Windows 10 SDK winrt/wrl/client.h is incompatible with clang due to #pragma pack usages
+    // (unclear why), so instead we use the wrl/client.h headers from https://github.com/ziglang/zig/tree/225fe6ddbfae016395762850e0cd5c51f9e7751c/lib/libc/include/any-windows-any
+    // which seem to work fine.
+    if (lib.target.getOsTag() == .windows and lib.target.getAbi() == .msvc) lib.addIncludePath(.{ .path = "msvc/" });
+
     // Microsoft does some shit.
     lib.disable_sanitize_c = true;
     lib.sanitize_thread = false; // sometimes in parallel, too.
@@ -95,7 +100,7 @@ fn linkFromSource(b: *Build, step: *std.build.CompileStep, options: Options) !vo
         try cflags.append("-g0");
         try cppflags.append("-g0");
     }
-    try cppflags.append("-std=c++14");
+    try cppflags.append("-std=c++17");
     const base_flags = &.{
         "-Wno-unused-command-line-argument",
         "-Wno-unused-variable",
@@ -203,9 +208,10 @@ fn linkFromSource(b: *Build, step: *std.build.CompileStep, options: Options) !vo
             "PluginLoader.cpp",
         },
     });
-    lib.defineCMacro("NDEBUG", ""); // disable assertions
+    if (lib.target.getAbi() != .msvc) lib.defineCMacro("NDEBUG", ""); // disable assertions
     if (lib.target.getOsTag() == .windows) {
         lib.defineCMacro("LLVM_ON_WIN32", "1");
+        if (lib.target.getAbi() == .msvc) lib.defineCMacro("CINDEX_LINKAGE", "");
         try appendLangScannedSources(b, lib, .{
             .cflags = cflags.items,
             .cppflags = cppflags.items,
@@ -263,6 +269,36 @@ fn linkFromSource(b: *Build, step: *std.build.CompileStep, options: Options) !vo
             // windows must be built with LTO disabled due to:
             // https://github.com/ziglang/zig/issues/15958
             dxc_exe.want_lto = false;
+            if (dxc_exe.target.getAbi() == .msvc) {
+                const msvc_lib_dir: ?[]const u8 = try @import("msvc.zig").MsvcLibDir.find(b.allocator);
+
+                // The MSVC lib dir looks like this:
+                // C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.38.33130\Lib\x64
+                // But we need the atlmfc lib dir:
+                // C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.38.33130\atlmfc\lib\x64
+                const msvc_dir = try std.fs.path.resolve(b.allocator, &.{ msvc_lib_dir.?, "..\\.." });
+
+                const lib_dir_path = try std.mem.concat(b.allocator, u8, &.{
+                    msvc_dir,
+                    "\\atlmfc\\lib\\",
+                    if (dxc_exe.target.getCpuArch() == .aarch64) "arm64" else "x64",
+                });
+
+                const lib_path = try std.mem.concat(b.allocator, u8, &.{ lib_dir_path, "\\atls.lib" });
+                const pdb_name = if (dxc_exe.target.getCpuArch() == .aarch64)
+                    "atls.arm64.pdb"
+                else
+                    "atls.amd64.pdb";
+                const pdb_path = try std.mem.concat(b.allocator, u8, &.{ lib_dir_path, "\\", pdb_name });
+
+                // For some reason, msvc target needs atls.lib to be in the 'zig build' working directory.
+                // Addomg tp the library path like this has no effect:
+                dxc_exe.addLibraryPath(.{ .path = lib_dir_path });
+                // So instead we must copy the lib into this directory:
+                try std.fs.cwd().copyFile(lib_path, std.fs.cwd(), "atls.lib", .{});
+                try std.fs.cwd().copyFile(pdb_path, std.fs.cwd(), pdb_name, .{});
+                // This is probably a bug in the Zig linker.
+            }
         }
     }
 
@@ -271,7 +307,10 @@ fn linkFromSource(b: *Build, step: *std.build.CompileStep, options: Options) !vo
 }
 
 fn linkMachDxcDependencies(step: *std.build.Step.Compile) void {
-    step.linkLibCpp();
+    if (step.target.getAbi() == .msvc) {
+        // https://github.com/ziglang/zig/issues/5312
+        step.linkLibC();
+    } else step.linkLibCpp();
     if (step.target.getOsTag() == .windows) {
         step.linkSystemLibrary("ole32");
         step.linkSystemLibrary("oleaut32");
@@ -378,6 +417,7 @@ fn addConfigHeaders(b: *Build, step: *std.build.CompileStep) void {
 }
 
 fn addIncludes(step: *std.build.CompileStep) void {
+    // TODO: replace unofficial external/DIA submodule with something else (or eliminate dep on it)
     step.addIncludePath(.{ .path = prefix ++ "/external/DIA/include" });
     // TODO: replace generated-include with logic to actually generate this code
     step.addIncludePath(.{ .path = "generated-include/" });
@@ -493,6 +533,7 @@ fn addConfigHeaderLLVMConfig(b: *Build, target: std.zig.CrossTarget, which: anyt
     const if_not_windows: ?i64 = if (tag == .windows) null else 1;
     const if_windows_or_linux: ?i64 = if (tag == .windows and !tag.isDarwin()) 1 else null;
     const if_darwin: ?i64 = if (tag.isDarwin()) 1 else null;
+    const if_not_msvc: ?i64 = if (target.getAbi() != .msvc) 1 else null;
     const config_h = merge(llvm_config_h, .{
         .HAVE_STRERROR = if_windows,
         .HAVE_STRERROR_R = if_not_windows,
@@ -506,6 +547,7 @@ fn addConfigHeaderLLVMConfig(b: *Build, target: std.zig.CrossTarget, which: anyt
         .HAVE_PTHREAD_RWLOCK_INIT = if_not_windows,
         .HAVE_DLOPEN = if_not_windows,
         .HAVE_DLFCN_H = if_not_windows, //
+        .HAVE_UNISTD_H = if_not_msvc,
 
         .BUG_REPORT_URL = "http://llvm.org/bugs/",
         .ENABLE_BACKTRACES = "",
@@ -540,7 +582,6 @@ fn addConfigHeaderLLVMConfig(b: *Build, target: std.zig.CrossTarget, which: anyt
         .HAVE_SYS_STAT_H = 1,
         .HAVE_SYS_TIME_H = 1,
         .HAVE_UINT64_T = 1,
-        .HAVE_UNISTD_H = 1,
         .HAVE_UTIME_H = 1,
         .HAVE__ALLOCA = 1,
         .HAVE___ASHLDI3 = 1,

@@ -1,9 +1,17 @@
 // TODO: investigate if we can eliminate this for Windows builds
 #ifdef _WIN32
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-#include <wrl/client.h>
-#endif
+    #ifdef _MSC_VER
+        #define __C89_NAMELESS
+        #define __C89_NAMELESSUNIONNAME
+        #define WIN32_LEAN_AND_MEAN
+        #include <windows.h>
+        #include <wrl/client.h>
+        #define CComPtr Microsoft::WRL::ComPtr
+    #else // _MSC_VER
+        #include <windows.h>
+        #include <wrl/client.h>
+    #endif // _MSC_VER
+#endif // _WIN32
 
 // Avoid __declspec(dllimport) since dxcompiler is static.
 #define DXC_API_IMPORT

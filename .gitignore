@@ -18,3 +18,7 @@ zig-out/
 /docgen_tmp/
 
 libs/DirectXShaderCompiler
+
+atls.lib
+atls.arm64.pdb
+atls.amd64.pdb
