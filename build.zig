@@ -3,7 +3,7 @@ const builtin = @import("builtin");
 const Build = std.Build;
 
 /// The latest binary release available at https://github.com/hexops/mach-dxcompiler/releases
-const latest_binary_release = "2023.12.13+1856725.1";
+const latest_binary_release = "2023.12.14+0b7073b.1";
 
 const log = std.log.scoped(.mach_dxcompiler);
 const prefix = "libs/DirectXShaderCompiler";
