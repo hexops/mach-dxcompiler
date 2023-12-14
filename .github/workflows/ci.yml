@@ -76,7 +76,8 @@ jobs:
       matrix:
         target: [
           'x86_64-windows-msvc',
-          'aarch64-windows-msvc',
+          # TODO: 'machine type x64 conflicts with arm64' during linking (zig bug)
+          # 'aarch64-windows-msvc',
         ]
         optimize: [Debug, ReleaseFast]
         include:
