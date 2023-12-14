@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const Build = std.Build;
 
 /// The latest binary release available at https://github.com/hexops/mach-dxcompiler/releases
@@ -269,7 +270,7 @@ fn linkFromSource(b: *Build, step: *std.build.CompileStep, options: Options) !vo
             // windows must be built with LTO disabled due to:
             // https://github.com/ziglang/zig/issues/15958
             dxc_exe.want_lto = false;
-            if (dxc_exe.target.getAbi() == .msvc) {
+            if (builtin.os.tag == .windows and dxc_exe.target.getAbi() == .msvc) {
                 const msvc_lib_dir: ?[]const u8 = try @import("msvc.zig").MsvcLibDir.find(b.allocator);
 
                 // The MSVC lib dir looks like this:
