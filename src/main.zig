@@ -85,7 +85,7 @@ test {
     if (result.getError()) |err| {
         defer err.deinit();
         std.debug.print("compiler error: {s}\n", .{err.getString()});
-        return;
+        return error.ShaderCompilationFailed;
     }
 
     const object = result.getObject();

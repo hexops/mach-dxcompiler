@@ -69,26 +69,30 @@ MACH_EXPORT MachDxcCompileResult machDxcCompile(
     sourceBuffer.Encoding = 0;
 
     // We have args in char form, but dxcInstance->Compile expects wchar_t form.
-    std::vector<std::wstring> arguments;
+    LPCWSTR* arguments = (LPCWSTR*)malloc(sizeof(LPCWSTR) * args_len);
+    wchar_t* wtext_buf = (wchar_t*)malloc(4096);
+    wchar_t* wtext_cursor = wtext_buf;
+    assert(arguments);
+    assert(wtext_buf);
+
     for (int i=0; i < args_len; i++) {
-        wchar_t wtext_buf[200];
-        std::mbstowcs(wtext_buf, args[i], strlen(args[i])+1);
-        arguments.push_back(std::wstring(wtext_buf));
-    }
-    std::vector<LPCWSTR> w_arguments_list;
-    for (int i=0; i < args_len; i++) {
-        w_arguments_list.push_back(arguments[i].data());
+        size_t available = 4096 / sizeof(wchar_t) - (wtext_cursor - wtext_buf);
+        size_t written = std::mbstowcs(wtext_cursor, args[i], available);
+        arguments[i] = wtext_cursor;
+        wtext_cursor += written + 1;
     }
 
     CComPtr<IDxcResult> pCompileResult;
     HRESULT hr = dxcInstance->Compile(
         &sourceBuffer,
-        w_arguments_list.data(),
-        (uint32_t)w_arguments_list.size(),
+        arguments,
+        (uint32_t)args_len,
         nullptr,
         IID_PPV_ARGS(&pCompileResult)
     );
     assert(SUCCEEDED(hr));
+    free(arguments);
+    free(wtext_buf);
     return reinterpret_cast<MachDxcCompileResult>(pCompileResult.Detach());
 }
 
