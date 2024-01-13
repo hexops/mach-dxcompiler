@@ -70,50 +70,53 @@ jobs:
         env:
           TARGET_OPT: ${{ matrix.target }}_${{ matrix.optimize }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-  msvc:
-    needs: draft_release
-    strategy:
-      matrix:
-        target: [
-          'x86_64-windows-msvc',
-          # TODO: 'machine type x64 conflicts with arm64' during linking (zig bug)
-          # 'aarch64-windows-msvc',
-        ]
-        optimize: [Debug, ReleaseFast]
-        include:
-          - target: 'x86_64-windows-msvc'
-            cpu: '-Dcpu=x86_64_v2'
-    runs-on: windows-latest
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v3
-      - name: Setup Zig
-        run: |
-          $ProgressPreference = 'SilentlyContinue'
-          Invoke-WebRequest -Uri "https://pkg.machengine.org/zig/zig-windows-x86_64-0.12.0-dev.2063+804cee3b9.zip" -OutFile "C:\zig.zip"
-          cd C:\
-          7z x zig.zip
-          Add-Content $env:GITHUB_PATH "C:\zig-windows-x86_64-0.12.0-dev.2063+804cee3b9\"
-      - name: build
-        run: zig build -Dfrom-source -Dtarget=${{ matrix.target }} -Doptimize=${{ matrix.optimize }} ${{ matrix.cpu }}
-      - name: upload
-        run: |
-          ZSTD_CLEVEL=19 tar -acf "${TARGET_OPT}_lib.tar.zst" -C zig-out/lib .
-          ZSTD_CLEVEL=19 tar -acf "${TARGET_OPT}_bin.tar.zst" -C zig-out/bin .
-          ZSTD_CLEVEL=19 tar -acf "${TARGET_OPT}_lib.tar.gz" -C zig-out/lib .
-          ZSTD_CLEVEL=19 tar -acf "${TARGET_OPT}_bin.tar.gz" -C zig-out/bin .
-          export RELEASE="$(date -u +%Y.%m.%d)+$(git rev-parse --short HEAD).${{ github.run_attempt }}"
-          gh release upload "$RELEASE" "${TARGET_OPT}_lib.tar.zst"
-          gh release upload "$RELEASE" "${TARGET_OPT}_bin.tar.zst"
-          gh release upload "$RELEASE" "${TARGET_OPT}_lib.tar.gz"
-          gh release upload "$RELEASE" "${TARGET_OPT}_bin.tar.gz"
-        shell: bash
-        env:
-          WINDOWS: true
-          TARGET_OPT: ${{ matrix.target }}_${{ matrix.optimize }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  # TODO: re-enable MSVC builds
+  # msvc:
+  #   needs: draft_release
+  #   strategy:
+  #     matrix:
+  #       target: [
+  #         'x86_64-windows-msvc',
+  #         # TODO: 'machine type x64 conflicts with arm64' during linking (zig bug)
+  #         # 'aarch64-windows-msvc',
+  #       ]
+  #       optimize: [Debug, ReleaseFast]
+  #       include:
+  #         - target: 'x86_64-windows-msvc'
+  #           cpu: '-Dcpu=x86_64_v2'
+  #   runs-on: windows-latest
+  #   steps:
+  #     - name: Checkout
+  #       uses: actions/checkout@v3
+  #     - name: Setup Zig
+  #       run: |
+  #         $ProgressPreference = 'SilentlyContinue'
+  #         Invoke-WebRequest -Uri "https://pkg.machengine.org/zig/zig-windows-x86_64-0.12.0-dev.2063+804cee3b9.zip" -OutFile "C:\zig.zip"
+  #         cd C:\
+  #         7z x zig.zip
+  #         Add-Content $env:GITHUB_PATH "C:\zig-windows-x86_64-0.12.0-dev.2063+804cee3b9\"
+  #     - name: build
+  #       run: zig build -Dfrom-source -Dtarget=${{ matrix.target }} -Doptimize=${{ matrix.optimize }} ${{ matrix.cpu }}
+  #     - name: upload
+  #       run: |
+  #         ZSTD_CLEVEL=19 tar -acf "${TARGET_OPT}_lib.tar.zst" -C zig-out/lib .
+  #         ZSTD_CLEVEL=19 tar -acf "${TARGET_OPT}_bin.tar.zst" -C zig-out/bin .
+  #         ZSTD_CLEVEL=19 tar -acf "${TARGET_OPT}_lib.tar.gz" -C zig-out/lib .
+  #         ZSTD_CLEVEL=19 tar -acf "${TARGET_OPT}_bin.tar.gz" -C zig-out/bin .
+  #         export RELEASE="$(date -u +%Y.%m.%d)+$(git rev-parse --short HEAD).${{ github.run_attempt }}"
+  #         gh release upload "$RELEASE" "${TARGET_OPT}_lib.tar.zst"
+  #         gh release upload "$RELEASE" "${TARGET_OPT}_bin.tar.zst"
+  #         gh release upload "$RELEASE" "${TARGET_OPT}_lib.tar.gz"
+  #         gh release upload "$RELEASE" "${TARGET_OPT}_bin.tar.gz"
+  #       shell: bash
+  #       env:
+  #         WINDOWS: true
+  #         TARGET_OPT: ${{ matrix.target }}_${{ matrix.optimize }}
+  #         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   publish:
-    needs: [all, msvc]
+    # TODO: re-enable MSVC builds
+    # needs: [all, msvc]
+    needs: [all]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
