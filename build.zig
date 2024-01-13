@@ -72,7 +72,7 @@ fn linkFromSource(b: *Build, step: *std.Build.Step.Compile, options: Options) !v
 
     const lib = b.addStaticLibrary(.{
         .name = "machdxcompiler",
-        .root_source_file = b.addWriteFiles().add("empty.c", ""),
+        .root_source_file = b.addWriteFiles().add("empty.zig", ""),
         .optimize = options.optimize,
         .target = step.root_module.resolved_target orelse b.host,
     });
@@ -244,7 +244,6 @@ fn linkFromSource(b: *Build, step: *std.Build.Step.Compile, options: Options) !v
     if (options.build_binary_tools) {
         const dxc_exe = b.addExecutable(.{
             .name = "dxc",
-            .root_source_file = b.addWriteFiles().add("empty.c", ""),
             .optimize = options.optimize,
             .target = step.root_module.resolved_target orelse b.host,
         });
