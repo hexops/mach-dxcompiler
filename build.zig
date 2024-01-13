@@ -15,7 +15,7 @@ pub fn build(b: *Build) !void {
 
     // Zig bindings
     const mach_dxcompiler = b.addModule("mach-dxcompiler", .{
-        .source_file = .{ .path = "src/main.zig" },
+        .root_source_file = .{ .path = "src/main.zig" },
     });
     _ = mach_dxcompiler;
 
@@ -58,7 +58,7 @@ pub const Options = struct {
     source_revision: []const u8 = "4190bb0c90d374c6b4d0b0f2c7b45b604eda24b6", // main branch
 };
 
-pub fn link(b: *Build, step: *std.build.CompileStep, options: Options) !void {
+pub fn link(b: *Build, step: *std.Build.Step.Compile, options: Options) !void {
     const opt = options;
 
     if (options.from_source)
@@ -67,15 +67,19 @@ pub fn link(b: *Build, step: *std.build.CompileStep, options: Options) !void {
         try linkFromBinary(b, step, opt);
 }
 
-fn linkFromSource(b: *Build, step: *std.build.CompileStep, options: Options) !void {
+fn linkFromSource(b: *Build, step: *std.Build.Step.Compile, options: Options) !void {
     try ensureGitRepoCloned(b.allocator, options.source_repository, options.source_revision, sdkPath("/libs/DirectXShaderCompiler"));
 
     const lib = b.addStaticLibrary(.{
         .name = "machdxcompiler",
         .root_source_file = b.addWriteFiles().add("empty.c", ""),
         .optimize = options.optimize,
-        .target = step.target,
+        .target = step.root_module.resolved_target orelse b.host,
     });
+    // Microsoft does some shit.
+    lib.root_module.sanitize_c = false;
+    lib.root_module.sanitize_thread = false; // sometimes in parallel, too.
+
     b.installArtifact(lib);
     if (options.install_libs) b.installArtifact(lib);
     lib.addCSourceFile(.{
@@ -84,16 +88,13 @@ fn linkFromSource(b: *Build, step: *std.build.CompileStep, options: Options) !vo
             "-fms-extensions", // __uuidof and friends (on non-windows targets)
         },
     });
-    if (lib.target.getOsTag() != .windows) lib.defineCMacro("HAVE_DLFCN_H", "1");
+    const target = lib.rootModuleTarget();
+    if (target.os.tag != .windows) lib.defineCMacro("HAVE_DLFCN_H", "1");
 
     // The Windows 10 SDK winrt/wrl/client.h is incompatible with clang due to #pragma pack usages
     // (unclear why), so instead we use the wrl/client.h headers from https://github.com/ziglang/zig/tree/225fe6ddbfae016395762850e0cd5c51f9e7751c/lib/libc/include/any-windows-any
     // which seem to work fine.
-    if (lib.target.getOsTag() == .windows and lib.target.getAbi() == .msvc) lib.addIncludePath(.{ .path = "msvc/" });
-
-    // Microsoft does some shit.
-    lib.disable_sanitize_c = true;
-    lib.sanitize_thread = false; // sometimes in parallel, too.
+    if (target.os.tag == .windows and target.abi == .msvc) lib.addIncludePath(.{ .path = "msvc/" });
 
     var cflags = std.ArrayList([]const u8).init(b.allocator);
     var cppflags = std.ArrayList([]const u8).init(b.allocator);
@@ -209,10 +210,10 @@ fn linkFromSource(b: *Build, step: *std.build.CompileStep, options: Options) !vo
             "PluginLoader.cpp",
         },
     });
-    if (lib.target.getAbi() != .msvc) lib.defineCMacro("NDEBUG", ""); // disable assertions
-    if (lib.target.getOsTag() == .windows) {
+    if (target.abi != .msvc) lib.defineCMacro("NDEBUG", ""); // disable assertions
+    if (target.os.tag == .windows) {
         lib.defineCMacro("LLVM_ON_WIN32", "1");
-        if (lib.target.getAbi() == .msvc) lib.defineCMacro("CINDEX_LINKAGE", "");
+        if (target.abi == .msvc) lib.defineCMacro("CINDEX_LINKAGE", "");
         try appendLangScannedSources(b, lib, .{
             .cflags = cflags.items,
             .cppflags = cppflags.items,
@@ -245,14 +246,15 @@ fn linkFromSource(b: *Build, step: *std.build.CompileStep, options: Options) !vo
             .name = "dxc",
             .root_source_file = b.addWriteFiles().add("empty.c", ""),
             .optimize = options.optimize,
-            .target = step.target,
+            .target = step.root_module.resolved_target orelse b.host,
         });
         dxc_exe.addCSourceFile(.{
             .file = .{ .path = prefix ++ "/tools/clang/tools/dxc/dxcmain.cpp" },
             .flags = &.{"-std=c++17"},
         });
         dxc_exe.defineCMacro("NDEBUG", ""); // disable assertions
-        if (dxc_exe.target.getOsTag() != .windows) dxc_exe.defineCMacro("HAVE_DLFCN_H", "1");
+        const dxc_exe_target = dxc_exe.rootModuleTarget();
+        if (dxc_exe_target.os.tag != .windows) dxc_exe.defineCMacro("HAVE_DLFCN_H", "1");
         dxc_exe.addIncludePath(.{ .path = prefix ++ "/tools/clang/tools" });
         dxc_exe.addIncludePath(.{ .path = prefix ++ "/include" });
         addConfigHeaders(b, dxc_exe);
@@ -266,11 +268,11 @@ fn linkFromSource(b: *Build, step: *std.build.CompileStep, options: Options) !vo
         b.installArtifact(dxc_exe);
         dxc_exe.linkLibrary(lib);
 
-        if (dxc_exe.target.getOsTag() == .windows) {
+        if (dxc_exe_target.os.tag == .windows) {
             // windows must be built with LTO disabled due to:
             // https://github.com/ziglang/zig/issues/15958
             dxc_exe.want_lto = false;
-            if (builtin.os.tag == .windows and dxc_exe.target.getAbi() == .msvc) {
+            if (builtin.os.tag == .windows and dxc_exe_target.abi == .msvc) {
                 const msvc_lib_dir: ?[]const u8 = try @import("msvc.zig").MsvcLibDir.find(b.allocator);
 
                 // The MSVC lib dir looks like this:
@@ -282,11 +284,11 @@ fn linkFromSource(b: *Build, step: *std.build.CompileStep, options: Options) !vo
                 const lib_dir_path = try std.mem.concat(b.allocator, u8, &.{
                     msvc_dir,
                     "\\atlmfc\\lib\\",
-                    if (dxc_exe.target.getCpuArch() == .aarch64) "arm64" else "x64",
+                    if (dxc_exe_target.cpu.arch == .aarch64) "arm64" else "x64",
                 });
 
                 const lib_path = try std.mem.concat(b.allocator, u8, &.{ lib_dir_path, "\\atls.lib" });
-                const pdb_name = if (dxc_exe.target.getCpuArch() == .aarch64)
+                const pdb_name = if (dxc_exe_target.cpu.arch == .aarch64)
                     "atls.arm64.pdb"
                 else
                     "atls.amd64.pdb";
@@ -307,18 +309,19 @@ fn linkFromSource(b: *Build, step: *std.build.CompileStep, options: Options) !vo
     step.addIncludePath(.{ .path = "src" });
 }
 
-fn linkMachDxcDependencies(step: *std.build.Step.Compile) void {
-    if (step.target.getAbi() == .msvc) {
+fn linkMachDxcDependencies(step: *std.Build.Step.Compile) void {
+    const target = step.rootModuleTarget();
+    if (target.abi == .msvc) {
         // https://github.com/ziglang/zig/issues/5312
         step.linkLibC();
     } else step.linkLibCpp();
-    if (step.target.getOsTag() == .windows) {
+    if (target.os.tag == .windows) {
         step.linkSystemLibrary("ole32");
         step.linkSystemLibrary("oleaut32");
     }
 }
 
-fn linkFromBinary(b: *Build, step: *std.build.CompileStep, options: Options) !void {
+fn linkFromBinary(b: *Build, step: *std.Build.Step.Compile, options: Options) !void {
     // Add a build step to download binaries. This being a custom build step ensures it only
     // downloads if needed, and that and that e.g. if you are running a different
     // `zig build <step>` it doesn't always just download the binaries.
@@ -333,7 +336,7 @@ fn linkFromBinary(b: *Build, step: *std.build.CompileStep, options: Options) !vo
     step.addIncludePath(.{ .path = "src" });
 }
 
-fn addConfigHeaders(b: *Build, step: *std.build.CompileStep) void {
+fn addConfigHeaders(b: *Build, step: *std.Build.Step.Compile) void {
     // /tools/clang/include/clang/Config/config.h.cmake
     step.addConfigHeader(b.addConfigHeader(
         .{
@@ -402,8 +405,9 @@ fn addConfigHeaders(b: *Build, step: *std.build.CompileStep) void {
         .{},
     ));
 
-    step.addConfigHeader(addConfigHeaderLLVMConfig(b, step.target, .llvm_config_h));
-    step.addConfigHeader(addConfigHeaderLLVMConfig(b, step.target, .config_h));
+    const target = step.rootModuleTarget();
+    step.addConfigHeader(addConfigHeaderLLVMConfig(b, target, .llvm_config_h));
+    step.addConfigHeader(addConfigHeaderLLVMConfig(b, target, .config_h));
 
     // /include/dxc/config.h.cmake
     step.addConfigHeader(b.addConfigHeader(
@@ -417,7 +421,7 @@ fn addConfigHeaders(b: *Build, step: *std.build.CompileStep) void {
     ));
 }
 
-fn addIncludes(step: *std.build.CompileStep) void {
+fn addIncludes(step: *std.Build.Step.Compile) void {
     // TODO: replace unofficial external/DIA submodule with something else (or eliminate dep on it)
     step.addIncludePath(.{ .path = prefix ++ "/external/DIA/include" });
     // TODO: replace generated-include with logic to actually generate this code
@@ -444,12 +448,13 @@ fn addIncludes(step: *std.build.CompileStep) void {
     step.addIncludePath(.{ .path = prefix ++ "/include/llvm/Passes" });
     step.addIncludePath(.{ .path = prefix ++ "/include/dxc" });
     step.addIncludePath(.{ .path = prefix ++ "/external/DirectX-Headers/include/directx" });
-    if (step.target.getOsTag() != .windows) step.addIncludePath(.{ .path = prefix ++ "/external/DirectX-Headers/include/wsl/stubs" });
+    const target = step.rootModuleTarget();
+    if (target.os.tag != .windows) step.addIncludePath(.{ .path = prefix ++ "/external/DirectX-Headers/include/wsl/stubs" });
 }
 
 // /include/llvm/Config/llvm-config.h.cmake
 // /include/llvm/Config/config.h.cmake (derives llvm-config.h.cmake)
-fn addConfigHeaderLLVMConfig(b: *Build, target: std.zig.CrossTarget, which: anytype) *std.Build.Step.ConfigHeader {
+fn addConfigHeaderLLVMConfig(b: *Build, target: std.Target, which: anytype) *std.Build.Step.ConfigHeader {
     // Note: LLVM_HOST_TRIPLEs can be found by running $ llc --version | grep Default
     // Note: arm64 is an alias for aarch64, we always use aarch64 over arm64.
     const cross_platform = .{
@@ -470,9 +475,9 @@ fn addConfigHeaderLLVMConfig(b: *Build, target: std.zig.CrossTarget, which: anyt
         HAVE_SYS_MMAN_H: ?i64 = null,
     };
     const llvm_config_h = blk: {
-        if (target.getOsTag() == .windows) {
-            break :blk switch (target.getAbi()) {
-                .msvc => switch (target.getCpuArch()) {
+        if (target.os.tag == .windows) {
+            break :blk switch (target.abi) {
+                .msvc => switch (target.cpu.arch) {
                     .x86_64 => merge(cross_platform, LLVMConfigH{
                         .LLVM_HOST_TRIPLE = "x86_64-w64-msvc",
                         .LLVM_ON_WIN32 = 1,
@@ -483,7 +488,7 @@ fn addConfigHeaderLLVMConfig(b: *Build, target: std.zig.CrossTarget, which: anyt
                     }),
                     else => @panic("target architecture not supported"),
                 },
-                .gnu => switch (target.getCpuArch()) {
+                .gnu => switch (target.cpu.arch) {
                     .x86_64 => merge(cross_platform, LLVMConfigH{
                         .LLVM_HOST_TRIPLE = "x86_64-w64-mingw32",
                         .LLVM_ON_WIN32 = 1,
@@ -496,8 +501,8 @@ fn addConfigHeaderLLVMConfig(b: *Build, target: std.zig.CrossTarget, which: anyt
                 },
                 else => @panic("target ABI not supported"),
             };
-        } else if (target.getOsTag().isDarwin()) {
-            break :blk switch (target.getCpuArch()) {
+        } else if (target.os.tag.isDarwin()) {
+            break :blk switch (target.cpu.arch) {
                 .aarch64 => merge(cross_platform, LLVMConfigH{
                     .LLVM_HOST_TRIPLE = "aarch64-apple-darwin",
                     .LLVM_ON_UNIX = 1,
@@ -513,7 +518,7 @@ fn addConfigHeaderLLVMConfig(b: *Build, target: std.zig.CrossTarget, which: anyt
         } else {
             // Assume linux-like
             // TODO: musl support?
-            break :blk switch (target.getCpuArch()) {
+            break :blk switch (target.cpu.arch) {
                 .aarch64 => merge(cross_platform, LLVMConfigH{
                     .LLVM_HOST_TRIPLE = "aarch64-linux-gnu",
                     .LLVM_ON_UNIX = 1,
@@ -529,12 +534,12 @@ fn addConfigHeaderLLVMConfig(b: *Build, target: std.zig.CrossTarget, which: anyt
         }
     };
 
-    const tag = target.getOsTag();
+    const tag = target.os.tag;
     const if_windows: ?i64 = if (tag == .windows) 1 else null;
     const if_not_windows: ?i64 = if (tag == .windows) null else 1;
     const if_windows_or_linux: ?i64 = if (tag == .windows and !tag.isDarwin()) 1 else null;
     const if_darwin: ?i64 = if (tag.isDarwin()) 1 else null;
-    const if_not_msvc: ?i64 = if (target.getAbi() != .msvc) 1 else null;
+    const if_not_msvc: ?i64 = if (target.abi != .msvc) 1 else null;
     const config_h = merge(llvm_config_h, .{
         .HAVE_STRERROR = if_windows,
         .HAVE_STRERROR_R = if_not_windows,
@@ -702,7 +707,7 @@ fn isEnvVarTruthy(allocator: std.mem.Allocator, name: []const u8) bool {
 
 fn appendLangScannedSources(
     b: *Build,
-    step: *std.build.CompileStep,
+    step: *std.Build.Step.Compile,
     args: struct {
         cflags: []const []const u8,
         cppflags: []const []const u8,
@@ -735,7 +740,7 @@ fn appendLangScannedSources(
     });
 }
 
-fn appendScannedSources(b: *Build, step: *std.build.CompileStep, args: struct {
+fn appendScannedSources(b: *Build, step: *std.Build.Step.Compile, args: struct {
     flags: []const []const u8,
     rel_dirs: []const []const u8 = &.{},
     extensions: []const []const u8,
@@ -841,10 +846,10 @@ const project_name = "dxcompiler";
 
 var download_mutex = std.Thread.Mutex{};
 
-fn binaryZigTriple(arena: std.mem.Allocator, step: *std.build.Step.Compile) ![]const u8 {
+fn binaryZigTriple(arena: std.mem.Allocator, step: *std.Build.Step.Compile) ![]const u8 {
     // Craft a zig_triple string that we will use to create the binary download URL. Remove OS
     // version range / glibc version from triple, as we don't include that in our download URL.
-    var binary_target = std.zig.CrossTarget.fromTarget(step.target_info.target);
+    var binary_target = std.zig.CrossTarget.fromTarget(step.rootModuleTarget());
     binary_target.os_version_min = .{ .none = undefined };
     binary_target.os_version_max = .{ .none = undefined };
     binary_target.glibc_version = null;
@@ -861,7 +866,7 @@ fn binaryOptimizeMode(options: Options) []const u8 {
     };
 }
 
-fn binaryCacheDirPath(b: *std.build.Builder, options: Options, step: *std.build.Step.Compile) ![]const u8 {
+fn binaryCacheDirPath(b: *std.Build, options: Options, step: *std.Build.Step.Compile) ![]const u8 {
     // Global Mach project cache directory, e.g. $HOME/.cache/zig/mach/<project_name>
     const project_cache_dir_rel = try b.global_cache_root.join(b.allocator, &.{ "mach", project_name });
 
@@ -876,17 +881,17 @@ fn binaryCacheDirPath(b: *std.build.Builder, options: Options, step: *std.build.
 }
 
 const DownloadBinaryStep = struct {
-    target_step: *std.build.Step.Compile,
+    target_step: *std.Build.Step.Compile,
     options: Options,
-    step: std.build.Step,
-    b: *std.build.Builder,
+    step: std.Build.Step,
+    b: *std.Build,
 
-    fn init(b: *std.build.Builder, target_step: *std.build.Step.Compile, options: Options) *DownloadBinaryStep {
+    fn init(b: *std.Build, target_step: *std.Build.Step.Compile, options: Options) *DownloadBinaryStep {
         const download_step = b.allocator.create(DownloadBinaryStep) catch unreachable;
         download_step.* = .{
             .target_step = target_step,
             .options = options,
-            .step = std.build.Step.init(.{
+            .step = std.Build.Step.init(.{
                 .id = .custom,
                 .name = "download",
                 .owner = b,
@@ -897,7 +902,7 @@ const DownloadBinaryStep = struct {
         return download_step;
     }
 
-    fn make(step_ptr: *std.build.Step, prog_node: *std.Progress.Node) anyerror!void {
+    fn make(step_ptr: *std.Build.Step, prog_node: *std.Progress.Node) anyerror!void {
         _ = prog_node;
         const download_step = @fieldParentPtr(DownloadBinaryStep, "step", step_ptr);
         const b = download_step.b;
