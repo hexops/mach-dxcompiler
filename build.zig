@@ -16,8 +16,11 @@ pub fn build(b: *Build) !void {
     // Zig bindings
     const mach_dxcompiler = b.addModule("mach-dxcompiler", .{
         .root_source_file = .{ .path = "src/main.zig" },
+        .target = target,
+        .optimize = optimize,
     });
-    _ = mach_dxcompiler;
+    mach_dxcompiler.addIncludePath(.{ .path = "src" });
+    if (!from_source) linkFromBinary(b, mach_dxcompiler, optimize);
 
     const main_tests = b.addTest(.{
         .name = "dxcompiler-tests",
@@ -25,6 +28,9 @@ pub fn build(b: *Build) !void {
         .target = target,
         .optimize = optimize,
     });
+    main_tests.addIncludePath(.{ .path = "src" });
+    if (!from_source) linkFromBinary(b, &main_tests.root_module, optimize);
+
     try link(b, main_tests, .{
         .install_libs = true,
         .build_binary_tools = true,
@@ -61,10 +67,7 @@ pub const Options = struct {
 pub fn link(b: *Build, step: *std.Build.Step.Compile, options: Options) !void {
     const opt = options;
 
-    if (options.from_source)
-        try linkFromSource(b, step, opt)
-    else
-        try linkFromBinary(b, step, opt);
+    if (options.from_source) try linkFromSource(b, step, opt);
 }
 
 fn linkFromSource(b: *Build, step: *std.Build.Step.Compile, options: Options) !void {
@@ -275,19 +278,43 @@ fn linkMachDxcDependencies(step: *std.Build.Step.Compile) void {
     }
 }
 
-fn linkFromBinary(b: *Build, step: *std.Build.Step.Compile, options: Options) !void {
-    // Add a build step to download binaries. This being a custom build step ensures it only
-    // downloads if needed, and that and that e.g. if you are running a different
-    // `zig build <step>` it doesn't always just download the binaries.
-    var download_step = DownloadBinaryStep.init(b, step, options);
-    step.step.dependOn(&download_step.step);
+fn linkMachDxcDependenciesModule(mod: *std.Build.Module) void {
+    const target = mod.resolved_target.?.result;
+    if (target.abi == .msvc) {
+        // https://github.com/ziglang/zig/issues/5312
+        mod.link_libc = true;
+    } else {
+        mod.link_libcpp = true;
+    }
+    if (target.os.tag == .windows) {
+        mod.linkSystemLibrary("ole32", .{});
+        mod.linkSystemLibrary("oleaut32", .{});
+    }
+}
 
-    const cache_dir = try binaryCacheDirPath(b, options, step);
-    step.addLibraryPath(.{ .path = cache_dir });
-    step.linkSystemLibrary("machdxcompiler");
-    linkMachDxcDependencies(step);
+fn linkFromBinary(b: *Build, mod: *std.Build.Module, optimize: std.builtin.OptimizeMode) void {
+    const resolved_target = mod.resolved_target.?;
+    const target = mod.resolved_target.?.result;
 
-    step.addIncludePath(.{ .path = "src" });
+    // We can't express that an std.Build.Module should depend on our DownloadBinaryStep.
+    // But we can express that an std.Build.Module should link a library, which depends on
+    // our DownloadBinaryStep.
+    const linkage = b.addStaticLibrary(.{
+        .name = "machdxcompiler-linkage",
+        .root_source_file = b.addWriteFiles().add("empty.zig", ""),
+        .optimize = optimize,
+        .target = resolved_target,
+    });
+    var download_step = DownloadBinaryStep.init(b, target, optimize);
+    linkage.step.dependOn(&download_step.step);
+
+    const cache_dir = binaryCacheDirPath(b, target, optimize) catch |err| std.debug.panic("unable to construct binary cache dir path: {}", .{err});
+    linkage.addLibraryPath(.{ .path = cache_dir });
+    linkage.linkSystemLibrary("machdxcompiler");
+    linkMachDxcDependenciesModule(&linkage.root_module);
+
+    mod.linkLibrary(linkage);
+    mod.addLibraryPath(.{ .path = cache_dir });
 }
 
 fn addConfigHeaders(b: *Build, step: *std.Build.Step.Compile) void {
@@ -735,18 +762,18 @@ const project_name = "dxcompiler";
 
 var download_mutex = std.Thread.Mutex{};
 
-fn binaryZigTriple(arena: std.mem.Allocator, step: *std.Build.Step.Compile) ![]const u8 {
+fn binaryZigTriple(arena: std.mem.Allocator, target: std.Target) ![]const u8 {
     // Craft a zig_triple string that we will use to create the binary download URL. Remove OS
     // version range / glibc version from triple, as we don't include that in our download URL.
-    var binary_target = std.zig.CrossTarget.fromTarget(step.rootModuleTarget());
+    var binary_target = std.zig.CrossTarget.fromTarget(target);
     binary_target.os_version_min = .{ .none = undefined };
     binary_target.os_version_max = .{ .none = undefined };
     binary_target.glibc_version = null;
     return try binary_target.zigTriple(arena);
 }
 
-fn binaryOptimizeMode(options: Options) []const u8 {
-    return switch (options.optimize) {
+fn binaryOptimizeMode(optimize: std.builtin.OptimizeMode) []const u8 {
+    return switch (optimize) {
         .Debug => "Debug",
         // All Release* are mapped to ReleaseFast, as we only provide ReleaseFast and Debug binaries.
         .ReleaseSafe => "ReleaseFast",
@@ -755,7 +782,7 @@ fn binaryOptimizeMode(options: Options) []const u8 {
     };
 }
 
-fn binaryCacheDirPath(b: *std.Build, options: Options, step: *std.Build.Step.Compile) ![]const u8 {
+fn binaryCacheDirPath(b: *std.Build, target: std.Target, optimize: std.builtin.OptimizeMode) ![]const u8 {
     // Global Mach project cache directory, e.g. $HOME/.cache/zig/mach/<project_name>
     const project_cache_dir_rel = try b.global_cache_root.join(b.allocator, &.{ "mach", project_name });
 
@@ -764,22 +791,22 @@ fn binaryCacheDirPath(b: *std.Build, options: Options, step: *std.Build.Step.Com
     return try std.fs.path.join(b.allocator, &.{
         project_cache_dir_rel,
         latest_binary_release,
-        try binaryZigTriple(b.allocator, step),
-        binaryOptimizeMode(options),
+        try binaryZigTriple(b.allocator, target),
+        binaryOptimizeMode(optimize),
     });
 }
 
 const DownloadBinaryStep = struct {
-    target_step: *std.Build.Step.Compile,
-    options: Options,
+    target: std.Target,
+    optimize: std.builtin.OptimizeMode,
     step: std.Build.Step,
     b: *std.Build,
 
-    fn init(b: *std.Build, target_step: *std.Build.Step.Compile, options: Options) *DownloadBinaryStep {
+    fn init(b: *std.Build, target: std.Target, optimize: std.builtin.OptimizeMode) *DownloadBinaryStep {
         const download_step = b.allocator.create(DownloadBinaryStep) catch unreachable;
         download_step.* = .{
-            .target_step = target_step,
-            .options = options,
+            .target = target,
+            .optimize = optimize,
             .step = std.Build.Step.init(.{
                 .id = .custom,
                 .name = "download",
@@ -795,8 +822,8 @@ const DownloadBinaryStep = struct {
         _ = prog_node;
         const download_step = @fieldParentPtr(DownloadBinaryStep, "step", step_ptr);
         const b = download_step.b;
-        const step = download_step.target_step;
-        const options = download_step.options;
+        const target = download_step.target;
+        const optimize = download_step.optimize;
 
         // Zig will run build steps in parallel if possible, so if there were two invocations of
         // link() then this function would be called in parallel. We're manipulating the FS here
@@ -805,7 +832,7 @@ const DownloadBinaryStep = struct {
         defer download_mutex.unlock();
 
         // Check if we've already downloaded binaries to the cache dir
-        const cache_dir = try binaryCacheDirPath(b, options, step);
+        const cache_dir = try binaryCacheDirPath(b, target, optimize);
         if (dirExists(cache_dir)) {
             // Nothing to do.
             return;
@@ -822,9 +849,9 @@ const DownloadBinaryStep = struct {
             "/hexops/mach-" ++ project_name ++ "/releases/download/",
             latest_binary_release,
             "/",
-            try binaryZigTriple(b.allocator, step),
+            try binaryZigTriple(b.allocator, target),
             "_",
-            binaryOptimizeMode(options),
+            binaryOptimizeMode(optimize),
             "_lib",
             ".tar.zst",
         });
