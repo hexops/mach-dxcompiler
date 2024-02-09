@@ -20,7 +20,13 @@ pub fn build(b: *Build) !void {
         .optimize = optimize,
     });
     mach_dxcompiler.addIncludePath(.{ .path = "src" });
-    if (!from_source) linkFromBinary(b, mach_dxcompiler, optimize);
+    // TODO: eloiminate options
+    const options = .{
+        .install_libs = true,
+        .build_binary_tools = true,
+        .from_source = from_source,
+    };
+    if (!from_source) linkFromBinary(b, mach_dxcompiler, optimize) else try linkFromSource(b, mach_dxcompiler, optimize, options);
 
     const main_tests = b.addTest(.{
         .name = "dxcompiler-tests",
@@ -29,13 +35,8 @@ pub fn build(b: *Build) !void {
         .optimize = optimize,
     });
     main_tests.addIncludePath(.{ .path = "src" });
-    if (!from_source) linkFromBinary(b, &main_tests.root_module, optimize);
+    if (!from_source) linkFromBinary(b, &main_tests.root_module, optimize) else try linkFromSource(b, &main_tests.root_module, optimize, options);
 
-    try link(b, main_tests, .{
-        .install_libs = true,
-        .build_binary_tools = true,
-        .from_source = from_source,
-    });
     b.installArtifact(main_tests);
     const test_step = b.step("test", "Run library tests");
     test_step.dependOn(&b.addRunArtifact(main_tests).step);
@@ -64,22 +65,20 @@ pub const Options = struct {
     source_revision: []const u8 = "4190bb0c90d374c6b4d0b0f2c7b45b604eda24b6", // main branch
 };
 
-pub fn link(b: *Build, step: *std.Build.Step.Compile, options: Options) !void {
-    const opt = options;
+fn linkFromSource(b: *Build, mod: *std.Build.Module, optimize: std.builtin.OptimizeMode, options: Options) !void {
+    const resolved_target = mod.resolved_target.?;
+    const target = mod.resolved_target.?.result;
 
-    if (options.from_source) try linkFromSource(b, step, opt);
-}
-
-fn linkFromSource(b: *Build, step: *std.Build.Step.Compile, options: Options) !void {
     const lib = b.addStaticLibrary(.{
         .name = "machdxcompiler",
         .root_source_file = b.addWriteFiles().add("empty.zig", ""),
-        .optimize = options.optimize,
-        .target = step.root_module.resolved_target orelse b.host,
+        .optimize = optimize,
+        .target = resolved_target,
     });
     // Microsoft does some shit.
     lib.root_module.sanitize_c = false;
     lib.root_module.sanitize_thread = false; // sometimes in parallel, too.
+    mod.linkLibrary(lib);
 
     var download_step = DownloadSourceStep.init(b, options);
     lib.step.dependOn(&download_step.step);
@@ -92,7 +91,6 @@ fn linkFromSource(b: *Build, step: *std.Build.Step.Compile, options: Options) !v
             "-fms-extensions", // __uuidof and friends (on non-windows targets)
         },
     });
-    const target = lib.rootModuleTarget();
     if (target.os.tag != .windows) lib.defineCMacro("HAVE_DLFCN_H", "1");
 
     // The Windows 10 SDK winrt/wrl/client.h is incompatible with clang due to #pragma pack usages
@@ -201,69 +199,66 @@ fn linkFromSource(b: *Build, step: *std.Build.Step.Compile, options: Options) !v
     // TODO: investigate how projects/dxilconv/lib/DxbcConverter/DxbcConverterImpl.h is getting pulled
     // in, we can get rid of dxbc conversion presumably
 
-    if (options.build_binary_tools) {
-        const dxc_exe = b.addExecutable(.{
-            .name = "dxc",
-            .optimize = options.optimize,
-            .target = step.root_module.resolved_target orelse b.host,
-        });
-        dxc_exe.addCSourceFile(.{
-            .file = .{ .path = prefix ++ "/tools/clang/tools/dxc/dxcmain.cpp" },
-            .flags = &.{"-std=c++17"},
-        });
-        dxc_exe.defineCMacro("NDEBUG", ""); // disable assertions
-        const dxc_exe_target = dxc_exe.rootModuleTarget();
-        if (dxc_exe_target.os.tag != .windows) dxc_exe.defineCMacro("HAVE_DLFCN_H", "1");
-        dxc_exe.addIncludePath(.{ .path = prefix ++ "/tools/clang/tools" });
-        dxc_exe.addIncludePath(.{ .path = prefix ++ "/include" });
-        addConfigHeaders(b, dxc_exe);
-        addIncludes(dxc_exe);
-        dxc_exe.addCSourceFile(.{
-            .file = .{ .path = prefix ++ "/tools/clang/tools/dxclib/dxc.cpp" },
-            .flags = cppflags.items,
-        });
-        b.installArtifact(dxc_exe);
-        dxc_exe.linkLibrary(lib);
+    // if (options.build_binary_tools) {
+    //     const dxc_exe = b.addExecutable(.{
+    //         .name = "dxc",
+    //         .optimize = options.optimize,
+    //         .target = resolved_target,
+    //     });
+    //     dxc_exe.addCSourceFile(.{
+    //         .file = .{ .path = prefix ++ "/tools/clang/tools/dxc/dxcmain.cpp" },
+    //         .flags = &.{"-std=c++17"},
+    //     });
+    //     dxc_exe.defineCMacro("NDEBUG", ""); // disable assertions
+    //     const dxc_exe_target = dxc_exe.rootModuleTarget();
+    //     if (dxc_exe_target.os.tag != .windows) dxc_exe.defineCMacro("HAVE_DLFCN_H", "1");
+    //     dxc_exe.addIncludePath(.{ .path = prefix ++ "/tools/clang/tools" });
+    //     dxc_exe.addIncludePath(.{ .path = prefix ++ "/include" });
+    //     addConfigHeaders(b, dxc_exe);
+    //     addIncludes(dxc_exe);
+    //     dxc_exe.addCSourceFile(.{
+    //         .file = .{ .path = prefix ++ "/tools/clang/tools/dxclib/dxc.cpp" },
+    //         .flags = cppflags.items,
+    //     });
+    //     b.installArtifact(dxc_exe);
+    //     dxc_exe.linkLibrary(lib);
 
-        if (dxc_exe_target.os.tag == .windows) {
-            // windows must be built with LTO disabled due to:
-            // https://github.com/ziglang/zig/issues/15958
-            dxc_exe.want_lto = false;
-            if (builtin.os.tag == .windows and dxc_exe_target.abi == .msvc) {
-                const msvc_lib_dir: ?[]const u8 = try @import("msvc.zig").MsvcLibDir.find(b.allocator);
+    //     if (dxc_exe_target.os.tag == .windows) {
+    //         // windows must be built with LTO disabled due to:
+    //         // https://github.com/ziglang/zig/issues/15958
+    //         dxc_exe.want_lto = false;
+    //         if (builtin.os.tag == .windows and dxc_exe_target.abi == .msvc) {
+    //             const msvc_lib_dir: ?[]const u8 = try @import("msvc.zig").MsvcLibDir.find(b.allocator);
 
-                // The MSVC lib dir looks like this:
-                // C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.38.33130\Lib\x64
-                // But we need the atlmfc lib dir:
-                // C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.38.33130\atlmfc\lib\x64
-                const msvc_dir = try std.fs.path.resolve(b.allocator, &.{ msvc_lib_dir.?, "..\\.." });
+    //             // The MSVC lib dir looks like this:
+    //             // C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.38.33130\Lib\x64
+    //             // But we need the atlmfc lib dir:
+    //             // C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.38.33130\atlmfc\lib\x64
+    //             const msvc_dir = try std.fs.path.resolve(b.allocator, &.{ msvc_lib_dir.?, "..\\.." });
 
-                const lib_dir_path = try std.mem.concat(b.allocator, u8, &.{
-                    msvc_dir,
-                    "\\atlmfc\\lib\\",
-                    if (dxc_exe_target.cpu.arch == .aarch64) "arm64" else "x64",
-                });
+    //             const lib_dir_path = try std.mem.concat(b.allocator, u8, &.{
+    //                 msvc_dir,
+    //                 "\\atlmfc\\lib\\",
+    //                 if (dxc_exe_target.cpu.arch == .aarch64) "arm64" else "x64",
+    //             });
 
-                const lib_path = try std.mem.concat(b.allocator, u8, &.{ lib_dir_path, "\\atls.lib" });
-                const pdb_name = if (dxc_exe_target.cpu.arch == .aarch64)
-                    "atls.arm64.pdb"
-                else
-                    "atls.amd64.pdb";
-                const pdb_path = try std.mem.concat(b.allocator, u8, &.{ lib_dir_path, "\\", pdb_name });
+    //             const lib_path = try std.mem.concat(b.allocator, u8, &.{ lib_dir_path, "\\atls.lib" });
+    //             const pdb_name = if (dxc_exe_target.cpu.arch == .aarch64)
+    //                 "atls.arm64.pdb"
+    //             else
+    //                 "atls.amd64.pdb";
+    //             const pdb_path = try std.mem.concat(b.allocator, u8, &.{ lib_dir_path, "\\", pdb_name });
 
-                // For some reason, msvc target needs atls.lib to be in the 'zig build' working directory.
-                // Addomg tp the library path like this has no effect:
-                dxc_exe.addLibraryPath(.{ .path = lib_dir_path });
-                // So instead we must copy the lib into this directory:
-                try std.fs.cwd().copyFile(lib_path, std.fs.cwd(), "atls.lib", .{});
-                try std.fs.cwd().copyFile(pdb_path, std.fs.cwd(), pdb_name, .{});
-                // This is probably a bug in the Zig linker.
-            }
-        }
-    }
-
-    step.linkLibrary(lib);
-    step.addIncludePath(.{ .path = "src" });
+    //             // For some reason, msvc target needs atls.lib to be in the 'zig build' working directory.
+    //             // Addomg tp the library path like this has no effect:
+    //             dxc_exe.addLibraryPath(.{ .path = lib_dir_path });
+    //             // So instead we must copy the lib into this directory:
+    //             try std.fs.cwd().copyFile(lib_path, std.fs.cwd(), "atls.lib", .{});
+    //             try std.fs.cwd().copyFile(pdb_path, std.fs.cwd(), pdb_name, .{});
+    //             // This is probably a bug in the Zig linker.
+    //         }
+    //     }
+    // }
 }
 
 fn linkMachDxcDependencies(step: *std.Build.Step.Compile) void {
@@ -746,7 +741,7 @@ const DownloadSourceStep = struct {
         const options = download_step.options;
 
         // Zig will run build steps in parallel if possible, so if there were two invocations of
-        // link() then this function would be called in parallel. We're manipulating the FS here
+        // then this function would be called in parallel. We're manipulating the FS here
         // and so need to prevent that.
         download_mutex.lock();
         defer download_mutex.unlock();
@@ -784,7 +779,8 @@ fn binaryOptimizeMode(optimize: std.builtin.OptimizeMode) []const u8 {
 
 fn binaryCacheDirPath(b: *std.Build, target: std.Target, optimize: std.builtin.OptimizeMode) ![]const u8 {
     // Global Mach project cache directory, e.g. $HOME/.cache/zig/mach/<project_name>
-    const project_cache_dir_rel = try b.global_cache_root.join(b.allocator, &.{ "mach", project_name });
+    const global_cache_root = if (@hasField(std.Build, "graph")) b.graph.global_cache_root else b.global_cache_root;
+    const project_cache_dir_rel = try global_cache_root.join(b.allocator, &.{ "mach", project_name });
 
     // Release-specific cache directory, e.g. $HOME/.cache/zig/mach/<project_name>/<latest_binary_release>/<zig_triple>/<optimize>
     // where we will download the binary release to.
@@ -826,7 +822,7 @@ const DownloadBinaryStep = struct {
         const optimize = download_step.optimize;
 
         // Zig will run build steps in parallel if possible, so if there were two invocations of
-        // link() then this function would be called in parallel. We're manipulating the FS here
+        // then this function would be called in parallel. We're manipulating the FS here
         // and so need to prevent that.
         download_mutex.lock();
         defer download_mutex.unlock();
