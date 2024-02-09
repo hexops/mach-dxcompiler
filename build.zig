@@ -3,7 +3,7 @@ const builtin = @import("builtin");
 const Build = std.Build;
 
 /// The latest binary release available at https://github.com/hexops/mach-dxcompiler/releases
-const latest_binary_release = "2024.02.09+f33f914.1";
+const latest_binary_release = "2024.02.09+2a845a9.1";
 
 /// When building from source, which repository and revision to clone.
 const source_repository = "https://github.com/hexops/DirectXShaderCompiler";
