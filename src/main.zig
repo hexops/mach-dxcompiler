@@ -2,7 +2,7 @@ const c = @cImport(
     @cInclude("mach_dxc.h"),
 );
 
-const Compiler = struct {
+pub const Compiler = struct {
     handle: c.MachDxcCompiler,
 
     pub fn init() Compiler {
