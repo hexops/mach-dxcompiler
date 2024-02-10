@@ -55,7 +55,7 @@ jobs:
           sudo apt install xz-utils
           sudo sh -c 'wget -c https://pkg.machengine.org/zig/zig-linux-x86_64-0.12.0-dev.2063+804cee3b9.tar.xz -O - | tar -xJ --strip-components=1 -C /usr/local/bin'
       - name: build
-        run: zig build -Dfrom-source -Dtarget=${{ matrix.target }} -Doptimize=${{ matrix.optimize }} ${{ matrix.cpu }} install dxc
+        run: zig build -Dfrom_source -Dtarget=${{ matrix.target }} -Doptimize=${{ matrix.optimize }} ${{ matrix.cpu }} install dxc
       - name: upload
         run: |
           ZSTD_CLEVEL=19 tar -acf "${TARGET_OPT}_lib.tar.zst" -C zig-out/lib .
@@ -97,7 +97,7 @@ jobs:
           7z x zig.zip
           Add-Content $env:GITHUB_PATH "C:\zig-windows-x86_64-0.12.0-dev.2063+804cee3b9\"
       - name: build
-        run: zig build -Dfrom-source -Dtarget=${{ matrix.target }} -Doptimize=${{ matrix.optimize }} ${{ matrix.cpu }} install dxc
+        run: zig build -Dfrom_source -Dtarget=${{ matrix.target }} -Doptimize=${{ matrix.optimize }} ${{ matrix.cpu }} install dxc
       - name: upload
         run: |
           ZSTD_CLEVEL=19 tar -acf "${TARGET_OPT}_lib.tar.zst" -C zig-out/lib .
