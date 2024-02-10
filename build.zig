@@ -15,8 +15,8 @@ const prefix = "libs/DirectXShaderCompiler";
 pub fn build(b: *Build) !void {
     const optimize = b.standardOptimizeOption(.{});
     const target = b.standardTargetOptions(.{});
-    const from_source = b.option(bool, "from-source", "Build dxcompiler from source (large C++ codebase)") orelse false;
-    const debug_symbols = b.option(bool, "debug-symbols", "Whether to produce detailed debug symbols (g0) or not. These increase binary size considerably.") orelse false;
+    const from_source = b.option(bool, "from_source", "Build dxcompiler from source (large C++ codebase)") orelse false;
+    const debug_symbols = b.option(bool, "debug_symbols", "Whether to produce detailed debug symbols (g0) or not. These increase binary size considerably.") orelse false;
 
     const machdxcompiler: struct { lib: *std.Build.Step.Compile, lib_path: ?[]const u8 } = blk: {
         if (!from_source) {
