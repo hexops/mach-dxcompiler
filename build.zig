@@ -822,80 +822,54 @@ const DownloadBinaryStep = struct {
 
         try downloadExtractTarball(
             b.allocator,
-            "", // tmp_dir_root
+            cache_dir,
             try std.fs.openDirAbsolute(cache_dir, .{}),
             download_url,
-            ZstdWrapper,
         );
-    }
-};
-
-// due to slight differences in the API of std.compress.(gzip|xz) and std.compress.zstd, zstd is
-// wrapped for generic use in unpackTarballCompressed: see github.com/ziglang/zig/issues/14739
-const ZstdWrapper = struct {
-    fn DecompressType(comptime T: type) type {
-        return error{}!std.compress.zstd.DecompressStream(T, .{});
-    }
-
-    fn decompress(allocator: std.mem.Allocator, reader: anytype) DecompressType(@TypeOf(reader)) {
-        return std.compress.zstd.decompressStream(allocator, reader);
     }
 };
 
 fn downloadExtractTarball(
     arena: std.mem.Allocator,
-    tmp_dir_root: []const u8,
+    out_dir_path: []const u8,
     out_dir: std.fs.Dir,
     url: []const u8,
-    comptime Compression: type,
 ) !void {
-    log.info("downloading {s}..\n", .{url});
+    log.info("downloading {s}\n", .{url});
     const gpa = arena;
 
-    // Create a tmp directory
-    const rand_int = std.crypto.random.int(u64);
-    const tmp_dir_sub_path = "tmp" ++ std.fs.path.sep_str ++ hex64(rand_int);
-    const tmp_dir_path = try std.fs.path.join(arena, &.{ tmp_dir_root, tmp_dir_sub_path });
-    var tmp_dir = blk: {
-        const dir = std.fs.cwd().makeOpenPath(tmp_dir_path, .{ .iterate = true }) catch |err| {
-            log.err("unable to create temporary directory '{s}': {s}", .{ tmp_dir_path, @errorName(err) });
-            return error.FetchFailed;
-        };
-        break :blk dir;
-    };
-    defer tmp_dir.close();
-
-    // Download the file into the tmp directory.
-    const download_path = try std.fs.path.join(arena, &.{ tmp_dir_path, "download" });
-    const download_file = try std.fs.cwd().createFile(download_path, .{});
-    defer download_file.close();
+    // Fetch the file into memory.
+    var resp = std.ArrayList(u8).init(arena);
+    defer resp.deinit();
     var client: std.http.Client = .{ .allocator = gpa };
     defer client.deinit();
-    var fetch_res = try client.fetch(arena, .{
+    var fetch_res = client.fetch(.{
         .location = .{ .url = url },
-        .response_strategy = .{ .file = download_file },
-    });
+        .response_storage = .{ .dynamic = &resp },
+        .max_append_size = 50 * 1024 * 1024,
+    }) catch |err| {
+        log.err("unable to fetch: error: {s}", .{@errorName(err)});
+        return error.FetchFailed;
+    };
     if (fetch_res.status.class() != .success) {
         log.err("unable to fetch: HTTP {}", .{fetch_res.status});
-        fetch_res.deinit();
         return error.FetchFailed;
     }
-    fetch_res.deinit();
-    const downloaded_file = try std.fs.cwd().openFile(download_path, .{});
-    defer downloaded_file.close();
+    log.info("extracting {} bytes to {s}\n", .{ resp.items.len, out_dir_path });
 
     // Decompress tarball
-    var br = std.io.bufferedReaderSize(std.crypto.tls.max_ciphertext_record_len, downloaded_file.reader());
-    var decompress = Compression.decompress(gpa, br.reader()) catch |err| {
-        log.err("unable to decompress downloaded tarball: {s}", .{@errorName(err)});
-        return error.DecompressFailed;
-    };
-    defer decompress.deinit();
+    const window_buffer = try gpa.alloc(u8, 1 << 23);
+    defer gpa.free(window_buffer);
+
+    var fbs = std.io.fixedBufferStream(resp.items);
+    var decompressor = std.compress.zstd.decompressor(fbs.reader(), .{
+        .window_buffer = window_buffer,
+    });
 
     // Unpack tarball
     var diagnostics: std.tar.Options.Diagnostics = .{ .allocator = gpa };
     defer diagnostics.deinit();
-    std.tar.pipeToFileSystem(out_dir, decompress.reader(), .{
+    std.tar.pipeToFileSystem(out_dir, decompressor.reader(), .{
         .diagnostics = &diagnostics,
         .strip_components = 1,
         // TODO: we would like to set this to executable_bit_only, but two
@@ -929,6 +903,7 @@ fn downloadExtractTarball(
         }
         return error.UnpackFailed;
     }
+    log.info("finished\n", .{});
 }
 
 fn dirExists(path: []const u8) bool {
