@@ -3,7 +3,7 @@ const builtin = @import("builtin");
 const Build = std.Build;
 
 /// The latest binary release available at https://github.com/hexops/mach-dxcompiler/releases
-const latest_binary_release = "2024.03.09+d19dd6d.1";
+const latest_binary_release = "2024.02.10+4ccd240.1";
 
 /// When building from source, which repository and revision to clone.
 const source_repository = "https://github.com/hexops/DirectXShaderCompiler";
@@ -17,6 +17,7 @@ pub fn build(b: *Build) !void {
     const target = b.standardTargetOptions(.{});
     const from_source = b.option(bool, "from_source", "Build dxcompiler from source (large C++ codebase)") orelse false;
     const debug_symbols = b.option(bool, "debug_symbols", "Whether to produce detailed debug symbols (g0) or not. These increase binary size considerably.") orelse false;
+    const build_shared = b.option(bool, "shared", "Build dxcompiler shared libraries") orelse false;
 
     const machdxcompiler: struct { lib: *std.Build.Step.Compile, lib_path: ?[]const u8 } = blk: {
         if (!from_source) {
@@ -36,6 +37,28 @@ pub fn build(b: *Build) !void {
             linkage.addLibraryPath(.{ .path = cache_dir });
             linkage.linkSystemLibrary("machdxcompiler");
             linkMachDxcDependenciesModule(&linkage.root_module);
+
+            // not sure if this will work with the linkage, but it might
+            if (build_shared)
+            {
+                const sharedlib = b.addSharedLibrary(.{
+                    .name = "machdxcompiler",
+                    .root_source_file = b.addWriteFiles().add("empty.c", ""),
+                    .optimize = optimize,
+                    .target = target,
+                });
+
+                sharedlib.addCSourceFile(.{
+                    .file = .{ .path = "src/shared_main.cpp" },
+                });
+
+                const shared_install_step = b.step("machdxcompiler", "Build and install the machdxcompiler shared library");
+                shared_install_step.dependOn(&b.addInstallArtifact(sharedlib, .{}).step);
+
+                b.installArtifact(sharedlib);
+                sharedlib.linkLibrary(linkage);
+            }
+
             break :blk .{ .lib = linkage, .lib_path = cache_dir };
         } else {
             const lib = b.addStaticLibrary(.{
@@ -44,7 +67,9 @@ pub fn build(b: *Build) !void {
                 .optimize = optimize,
                 .target = target,
             });
+
             b.installArtifact(lib);
+            
             // Microsoft does some shit.
             lib.root_module.sanitize_c = false;
             lib.root_module.sanitize_thread = false; // sometimes in parallel, too.
@@ -72,6 +97,7 @@ pub fn build(b: *Build) !void {
                 try cppflags.append("-g0");
             }
             try cppflags.append("-std=c++17");
+
             const base_flags = &.{
                 "-Wno-unused-command-line-argument",
                 "-Wno-unused-variable",
@@ -81,6 +107,7 @@ pub fn build(b: *Build) !void {
                 "-Wno-implicit-fallthrough",
                 "-fms-extensions", // __uuidof and friends (on non-windows targets)
             };
+
             try cflags.appendSlice(base_flags);
             try cppflags.appendSlice(base_flags);
 
@@ -106,6 +133,7 @@ pub fn build(b: *Build) !void {
                 tools_clang_lib_frontend_sources ++
                 tools_clang_tools_libclang_sources ++
                 tools_clang_tools_dxcompiler_sources ++
+                spirv_codegen_sources ++
                 lib_bitcode_reader_sources ++
                 lib_bitcode_writer_sources ++
                 lib_ir_sources ++
@@ -224,6 +252,26 @@ pub fn build(b: *Build) !void {
                     try std.fs.cwd().copyFile(pdb_path, std.fs.cwd(), pdb_name, .{});
                     // This is probably a bug in the Zig linker.
                 }
+            }
+
+            if (build_shared)
+            {
+                const sharedlib = b.addSharedLibrary(.{
+                    .name = "machdxcompiler",
+                    .root_source_file = b.addWriteFiles().add("empty.c", ""),
+                    .optimize = optimize,
+                    .target = target,
+                });
+
+                sharedlib.addCSourceFile(.{
+                    .file = .{ .path = "src/shared_main.cpp" },
+                });
+
+                const shared_install_step = b.step("machdxcompiler", "Build and install the machdxcompiler shared library");
+                shared_install_step.dependOn(&b.addInstallArtifact(sharedlib, .{}).step);
+
+                b.installArtifact(sharedlib);
+                sharedlib.linkLibrary(lib);
             }
 
             break :blk .{ .lib = lib, .lib_path = null };
@@ -394,6 +442,13 @@ fn addIncludes(step: *std.Build.Step.Compile) void {
     step.addIncludePath(.{ .path = prefix ++ "/include/llvm/Passes" });
     step.addIncludePath(.{ .path = prefix ++ "/include/dxc" });
     step.addIncludePath(.{ .path = prefix ++ "/external/DirectX-Headers/include/directx" });
+
+    step.addIncludePath(.{ .path = prefix ++ "/external/SPIRV-Tools" });
+    step.addIncludePath(.{ .path = prefix ++ "/external/SPIRV-Headers" });
+    step.addIncludePath(.{ .path = prefix ++ "/external/SPIRV-Tools/include" });
+    step.addIncludePath(.{ .path = prefix ++ "/external/SPIRV-Headers/include" });
+    step.addIncludePath(.{ .path = prefix ++ "/external/SPIRV-Headers/include/spirv/unified1" });
+    
     const target = step.rootModuleTarget();
     if (target.os.tag != .windows) step.addIncludePath(.{ .path = prefix ++ "/external/DirectX-Headers/include/wsl/stubs" });
 }
