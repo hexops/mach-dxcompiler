@@ -133,7 +133,6 @@ pub fn build(b: *Build) !void {
                 tools_clang_lib_frontend_sources ++
                 tools_clang_tools_libclang_sources ++
                 tools_clang_tools_dxcompiler_sources ++
-                spirv_codegen_sources ++
                 lib_bitcode_reader_sources ++
                 lib_bitcode_writer_sources ++
                 lib_ir_sources ++
@@ -442,12 +441,6 @@ fn addIncludes(step: *std.Build.Step.Compile) void {
     step.addIncludePath(.{ .path = prefix ++ "/include/llvm/Passes" });
     step.addIncludePath(.{ .path = prefix ++ "/include/dxc" });
     step.addIncludePath(.{ .path = prefix ++ "/external/DirectX-Headers/include/directx" });
-
-    step.addIncludePath(.{ .path = prefix ++ "/external/SPIRV-Tools" });
-    step.addIncludePath(.{ .path = prefix ++ "/external/SPIRV-Headers" });
-    step.addIncludePath(.{ .path = prefix ++ "/external/SPIRV-Tools/include" });
-    step.addIncludePath(.{ .path = prefix ++ "/external/SPIRV-Headers/include" });
-    step.addIncludePath(.{ .path = prefix ++ "/external/SPIRV-Headers/include/spirv/unified1" });
     
     const target = step.rootModuleTarget();
     if (target.os.tag != .windows) step.addIncludePath(.{ .path = prefix ++ "/external/DirectX-Headers/include/wsl/stubs" });
