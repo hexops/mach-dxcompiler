@@ -38,25 +38,10 @@ pub fn build(b: *Build) !void {
             linkage.linkSystemLibrary("machdxcompiler");
             linkMachDxcDependenciesModule(&linkage.root_module);
 
-            // not sure if this will work with the linkage, but it might
+            // not entirely sure this will work
             if (build_shared)
             {
-                const sharedlib = b.addSharedLibrary(.{
-                    .name = "machdxcompiler",
-                    .root_source_file = b.addWriteFiles().add("empty.c", ""),
-                    .optimize = optimize,
-                    .target = target,
-                });
-
-                sharedlib.addCSourceFile(.{
-                    .file = .{ .path = "src/shared_main.cpp" },
-                });
-
-                const shared_install_step = b.step("machdxcompiler", "Build and install the machdxcompiler shared library");
-                shared_install_step.dependOn(&b.addInstallArtifact(sharedlib, .{}).step);
-
-                b.installArtifact(sharedlib);
-                sharedlib.linkLibrary(linkage);
+                buildShared(b, linkage, optimize, target);
             }
 
             break :blk .{ .lib = linkage, .lib_path = cache_dir };
@@ -255,22 +240,7 @@ pub fn build(b: *Build) !void {
 
             if (build_shared)
             {
-                const sharedlib = b.addSharedLibrary(.{
-                    .name = "machdxcompiler",
-                    .root_source_file = b.addWriteFiles().add("empty.c", ""),
-                    .optimize = optimize,
-                    .target = target,
-                });
-
-                sharedlib.addCSourceFile(.{
-                    .file = .{ .path = "src/shared_main.cpp" },
-                });
-
-                const shared_install_step = b.step("machdxcompiler", "Build and install the machdxcompiler shared library");
-                shared_install_step.dependOn(&b.addInstallArtifact(sharedlib, .{}).step);
-
-                b.installArtifact(sharedlib);
-                sharedlib.linkLibrary(lib);
+                buildShared(b, lib, optimize, target);
             }
 
             break :blk .{ .lib = lib, .lib_path = null };
@@ -301,6 +271,26 @@ pub fn build(b: *Build) !void {
     b.installArtifact(main_tests);
     const test_step = b.step("test", "Run library tests");
     test_step.dependOn(&b.addRunArtifact(main_tests).step);
+}
+
+fn buildShared(b: *Build, lib: *Build.Step.Compile, optimize: std.builtin.OptimizeMode, target: std.Build.ResolvedTarget) void
+{
+    const sharedlib = b.addSharedLibrary(.{
+        .name = "machdxcompiler",
+        .root_source_file = b.addWriteFiles().add("empty.c", ""),
+        .optimize = optimize,
+        .target = target,
+    });
+
+    sharedlib.addCSourceFile(.{
+        .file = .{ .path = "src/shared_main.cpp" },
+    });
+
+    const shared_install_step = b.step("machdxcompiler", "Build and install the machdxcompiler shared library");
+    shared_install_step.dependOn(&b.addInstallArtifact(sharedlib, .{}).step);
+
+    b.installArtifact(sharedlib);
+    sharedlib.linkLibrary(lib);
 }
 
 fn linkMachDxcDependencies(step: *std.Build.Step.Compile) void {
