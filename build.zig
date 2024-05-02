@@ -18,6 +18,7 @@ pub fn build(b: *Build) !void {
     const from_source = b.option(bool, "from_source", "Build dxcompiler from source (large C++ codebase)") orelse false;
     const debug_symbols = b.option(bool, "debug_symbols", "Whether to produce detailed debug symbols (g0) or not. These increase binary size considerably.") orelse false;
     const build_shared = b.option(bool, "shared", "Build dxcompiler shared libraries") orelse false;
+    const build_spirv = b.option(bool, "spirv", "Build spir-v compilation support") orelse false;
 
     const machdxcompiler: struct { lib: *std.Build.Step.Compile, lib_path: ?[]const u8 } = blk: {
         if (!from_source) {
@@ -149,6 +150,55 @@ pub fn build(b: *Build) !void {
             const c_sources =
                 lib_support_c_sources ++
                 lib_dxilcompression_c_sources;
+
+            // Build and link SPIRV-Tools
+            if (build_spirv)
+            {
+                // Ignore building tests 
+                const spirv_cpp_sources = 
+                    spirv_tools ++
+                    spirv_tools_reduce ++
+                    spirv_tools_lint ++ 
+                    spirv_tools_link ++ 
+                    spirv_tools_util ++
+                    spirv_tools_val ++
+                    // spirv_tools_wasm ++ // Wasm build support- requires emscripten toolchain
+                    spirv_tools_opt;
+
+                const spv_lib = b.addStaticLibrary(.{
+                    .name = "SPIRV-Tools",
+                    .root_source_file = b.addWriteFiles().add("empty.c", ""),
+                    .optimize = optimize,
+                    .target = target,
+                });
+    
+                var build_grammar_step = BuildSPIRVGrammarStep.init(b);
+                spv_lib.step.dependOn(&build_grammar_step.step);
+
+                spv_lib.addCSourceFiles(.{
+                    .files = &spirv_cpp_sources,
+                    .flags = cppflags.items,
+                });
+
+                spv_lib.defineCMacro("SPIRV_COLOR_TERMINAL", "ON"); // Pretty lights by default
+
+                addSPIRVIncludes(spv_lib);
+                linkMachDxcDependencies(spv_lib);
+
+                b.installArtifact(spv_lib);
+    
+                lib.defineCMacro("ENABLE_SPIRV_CODEGEN", "ON");
+
+                addSPIRVIncludes(lib);
+
+                // Add clang SPIRV tooling sources
+                lib.addCSourceFiles(.{
+                    .files = &lib_spirv,
+                    .flags = cppflags.items,
+                });
+
+                lib.linkLibrary(spv_lib);
+            }
 
             lib.addCSourceFiles(.{
                 .files = &cpp_sources,
@@ -436,6 +486,20 @@ fn addIncludes(step: *std.Build.Step.Compile) void {
     if (target.os.tag != .windows) step.addIncludePath(.{ .path = prefix ++ "/external/DirectX-Headers/include/wsl/stubs" });
 }
 
+
+fn addSPIRVIncludes(step: *std.Build.Step.Compile) void
+{
+    // Generated SPIR-V headers get thrown in here
+    step.addIncludePath(.{ .path = "generated-include/" });
+
+    step.addIncludePath(.{ .path = prefix ++ "/external/SPIRV-Tools" });
+    step.addIncludePath(.{ .path = prefix ++ "/external/SPIRV-Tools/include" });
+    step.addIncludePath(.{ .path = prefix ++ "/external/SPIRV-Tools/source" });
+
+    step.addIncludePath(.{ .path = prefix ++ "/external/SPIRV-Headers/include" });
+}
+
+
 // /include/llvm/Config/llvm-config.h.cmake
 // /include/llvm/Config/config.h.cmake (derives llvm-config.h.cmake)
 fn addConfigHeaderLLVMConfig(b: *Build, target: std.Target, which: anytype) *std.Build.Step.ConfigHeader {
@@ -610,7 +674,36 @@ fn addConfigHeaderLLVMConfig(b: *Build, target: std.Target, which: anytype) *std
     };
 }
 
-fn ensureGitRepoCloned(allocator: std.mem.Allocator, clone_url: []const u8, revision: []const u8, dir: []const u8) !void {
+fn ensureCommandExists(allocator: std.mem.Allocator, name: []const u8, exist_check: []const u8) bool 
+{
+    const result = std.ChildProcess.run(.{
+        .allocator = allocator,
+        .argv = &[_][]const u8{ name, exist_check },
+        .cwd = ".",
+    }) 
+    catch // e.g. FileNotFound
+    { 
+        return false;
+    };
+
+    defer 
+    {
+        allocator.free(result.stderr);
+        allocator.free(result.stdout);
+    }
+
+    if (result.term.Exited != 0) 
+        return false;
+
+    return true;
+}
+
+// ------------------------------------------
+// Source cloning logic
+// ------------------------------------------
+
+fn ensureGitRepoCloned(allocator: std.mem.Allocator, clone_url: []const u8, revision: []const u8, dir: []const u8) !void 
+{
     if (isEnvVarTruthy(allocator, "NO_ENSURE_SUBMODULES") or isEnvVarTruthy(allocator, "NO_ENSURE_GIT")) {
         return;
     }
@@ -646,21 +739,11 @@ fn getCurrentGitRevision(allocator: std.mem.Allocator, cwd: []const u8) ![]const
     return result.stdout;
 }
 
-fn ensureGit(allocator: std.mem.Allocator) void {
-    const argv = &[_][]const u8{ "git", "--version" };
-    const result = std.ChildProcess.run(.{
-        .allocator = allocator,
-        .argv = argv,
-        .cwd = ".",
-    }) catch { // e.g. FileNotFound
-        log.err("'git --version' failed. Is git not installed?", .{});
-        std.process.exit(1);
-    };
-    defer {
-        allocator.free(result.stderr);
-        allocator.free(result.stdout);
-    }
-    if (result.term.Exited != 0) {
+// Command validation logic moved to ensureCommandExists()
+fn ensureGit(allocator: std.mem.Allocator) void 
+{
+    if (!ensureCommandExists(allocator, "git", "--version"))
+    {
         log.err("'git --version' failed. Is git not installed?", .{});
         std.process.exit(1);
     }
@@ -967,6 +1050,271 @@ test hex64 {
     const s = "[" ++ hex64(0x12345678_abcdef00) ++ "]";
     try std.testing.expectEqualStrings("[00efcdab78563412]", s);
 }
+
+// ------------------------------------------
+// SPIR-V include generation logic
+// ------------------------------------------
+
+fn ensurePython(allocator: std.mem.Allocator) void
+{
+    if (!ensureCommandExists(allocator, "python3", "--version"))
+    { 
+        log.err("'python3 --version' failed. Is python not installed?", .{});
+        std.process.exit(1);
+    }
+}
+
+const spirv_headers_path = prefix ++ "/external/SPIRV-Headers";
+const spirv_tools_path = prefix ++ "/external/SPIRV-Tools";
+
+const grammar_tables_script = spirv_tools_path ++ "/utils/generate_grammar_tables.py";
+
+const debuginfo_insts_file = spirv_headers_path ++ "/include/spirv/unified1/extinst.debuginfo.grammar.json";
+const cldebuginfo100_insts_file = spirv_headers_path ++ "/include/spirv/unified1/extinst.opencl.debuginfo.100.grammar.json";
+
+
+fn spvHeaderFile(comptime version: []const u8, comptime file_name: []const u8) []const u8 {
+    return spirv_headers_path ++ "/include/spirv/" ++ version ++ "/" ++ file_name;
+}
+
+// Most of this was created based off of how the BUILD.gn file in SPIRV-Tools constructed the includes
+
+fn genSPIRVCoreTables(allocator: std.mem.Allocator, comptime version: []const u8) void {
+    const core_json_file = spvHeaderFile(version, "spirv.core.grammar.json");
+
+    // Outputs
+    const core_insts_file = "generated-include/core.insts-" ++ version ++ ".inc";
+    const operand_kinds_file = "generated-include/operand.kinds-" ++ version ++ ".inc";
+
+    const args = &[_][]const u8 {
+        "python3", grammar_tables_script,
+        "--spirv-core-grammar", core_json_file,
+        "--core-insts-output", core_insts_file,
+        "--extinst-debuginfo-grammar", debuginfo_insts_file,
+        "--extinst-cldebuginfo100-grammar", cldebuginfo100_insts_file,
+        "--operand-kinds-output", operand_kinds_file,
+        "--output-language", "c++"
+    };
+
+    exec(allocator, args, sdkPath("/")) catch |err| 
+    {
+        log.err("Failed to build SPIR-V core tables: error: {s}", .{@errorName(err)});
+        std.process.exit(1);
+    };
+}
+
+
+fn genSPIRVCoreEnums(allocator: std.mem.Allocator, comptime version: []const u8) void {
+    const core_json_file = spvHeaderFile(version, "spirv.core.grammar.json");
+
+    const extension_enum_file = "generated-include/extension_enum.inc";
+    const extension_map_file = "generated-include/enum_string_mapping.inc";
+
+    const args = &[_][]const u8 {
+        "python3", grammar_tables_script,
+        "--spirv-core-grammar", core_json_file,
+        "--extinst-debuginfo-grammar", debuginfo_insts_file,
+        "--extinst-cldebuginfo100-grammar", cldebuginfo100_insts_file,
+        "--extension-enum-output", extension_enum_file,
+        "--enum-string-mapping-output", extension_map_file,
+        "--output-language", "c++"
+    };
+
+    exec(allocator, args, sdkPath("/")) catch |err| 
+    {
+        log.err("Failed to build SPIR-V core enums: error: {s}", .{@errorName(err)});
+        std.process.exit(1);
+    };
+}
+
+
+fn genSPIRVGlslTables(allocator: std.mem.Allocator, comptime version: []const u8) void {
+    const core_json_file = spvHeaderFile(version, "spirv.core.grammar.json");
+    const glsl_json_file = spvHeaderFile(version, "extinst.glsl.std.450.grammar.json");
+
+    const glsl_insts_file = "generated-include/glsl.std.450.insts.inc";
+
+    const args = &[_][]const u8 {
+        "python3", grammar_tables_script,
+        "--spirv-core-grammar", core_json_file,
+        "--extinst-debuginfo-grammar", debuginfo_insts_file,
+        "--extinst-cldebuginfo100-grammar", cldebuginfo100_insts_file,
+        "--extinst-glsl-grammar", glsl_json_file,
+        "--glsl-insts-output", glsl_insts_file,
+        "--output-language", "c++"
+    };
+
+    exec(allocator, args, sdkPath("/")) catch |err| 
+    {
+        log.err("Failed to build SPIR-V GLSL tables: error: {s}", .{@errorName(err)});
+        std.process.exit(1);
+    };
+}
+
+
+fn genSPIRVOpenCLTables(allocator: std.mem.Allocator, comptime version: []const u8) void {
+    const core_json_file = spvHeaderFile(version, "spirv.core.grammar.json");
+    const opencl_json_file = spvHeaderFile(version, "extinst.opencl.std.100.grammar.json");
+    
+    const opencl_insts_file = "generated-include/opencl.std.insts.inc";
+
+    const args = &[_][]const u8 {
+        "python3", grammar_tables_script,
+        "--spirv-core-grammar", core_json_file,
+        "--extinst-debuginfo-grammar", debuginfo_insts_file,
+        "--extinst-cldebuginfo100-grammar", cldebuginfo100_insts_file,
+        "--extinst-opencl-grammar", opencl_json_file,
+        "--opencl-insts-output", opencl_insts_file,
+    };
+
+    exec(allocator, args, sdkPath("/")) catch |err| 
+    {
+        log.err("Failed to build SPIR-V OpenCL tables: error: {s}", .{@errorName(err)});
+        std.process.exit(1);
+    };
+}
+
+
+fn genSPIRVLanguageHeader(allocator: std.mem.Allocator, comptime name: []const u8, comptime grammar_file: []const u8) void {
+    const script = spirv_tools_path ++ "/utils/generate_language_headers.py";
+
+    const extinst_output_path = "generated-include/" ++ name ++ ".h";
+
+    const args = &[_][]const u8 {
+        "python3", script,
+        "--extinst-grammar", grammar_file,
+        "--extinst-output-path", extinst_output_path,
+    };
+
+    exec(allocator, args, sdkPath("/")) catch |err| 
+    {
+        log.err("Failed to generate SPIR-V language header '" ++ name ++ "'. error: {s}", .{@errorName(err)});
+        std.process.exit(1);
+    };
+}
+
+
+fn genSPIRVVendorTable(allocator: std.mem.Allocator, comptime name: []const u8, comptime operand_kind_prefix: []const u8) void {
+    const extinst_vendor_grammar = spirv_headers_path ++ "/include/spirv/unified1/extinst." ++ name ++ ".grammar.json";
+    const extinst_file = "generated-include/" ++ name ++ ".insts.inc";
+
+    const args = &[_][]const u8 {
+        "python3", grammar_tables_script,
+        "--extinst-vendor-grammar", extinst_vendor_grammar,
+        "--vendor-insts-output", extinst_file,
+        "--vendor-operand-kind-prefix", operand_kind_prefix,
+    };
+
+    exec(allocator, args, sdkPath("/")) catch |err| 
+    {
+        log.err("Failed to generate SPIR-V vendor table '" ++ name ++ "'. error: {s}", .{@errorName(err)});
+        std.process.exit(1);
+    };
+}
+
+fn genSPIRVRegistryTables(allocator: std.mem.Allocator) void {
+    const script = spirv_tools_path ++ "/utils/generate_registry_tables.py";
+
+    const xml_file = spirv_headers_path ++ "/include/spirv/spir-v.xml";
+    const inc_file = "generated-include/generators.inc";
+
+    const args = &[_][]const u8 {
+        "python3", script,
+        "--xml", xml_file,
+        "--generator", inc_file,
+    };
+
+    exec(allocator, args, sdkPath("/")) catch |err| 
+    {
+        log.err("Failed to generate SPIR-V registry tables. error: {s}", .{@errorName(err)});
+        std.process.exit(1);
+    };
+}
+
+fn buildSPIRVVersion(allocator: std.mem.Allocator) void {
+    const script = spirv_tools_path ++ "/utils/update_build_version.py";
+
+    const changes_file = spirv_tools_path ++ "/CHANGES";
+    const inc_file = "generated-include/build-version.inc";
+
+    const args = &[_][]const u8 {
+        "python3", script,
+        changes_file,
+        inc_file,
+    };
+
+    exec(allocator, args, sdkPath("/")) catch |err| 
+    {
+        log.err("Failed to generate SPIR-V build version. error: {s}", .{@errorName(err)});
+        std.process.exit(1);
+    };
+}
+
+fn generateSPIRVGrammar(allocator: std.mem.Allocator) void {
+    ensurePython(allocator);
+
+    genSPIRVCoreTables(allocator, "unified1");
+    genSPIRVCoreEnums(allocator, "unified1");
+
+    genSPIRVGlslTables(allocator, "1.0");
+
+    genSPIRVOpenCLTables(allocator, "1.0");
+
+    genSPIRVLanguageHeader(allocator, "DebugInfo", spvHeaderFile("unified1", "extinst.debuginfo.grammar.json"));
+    genSPIRVLanguageHeader(allocator, "OpenCLDebugInfo100", spvHeaderFile("unified1", "extinst.opencl.debuginfo.100.grammar.json"));
+    genSPIRVLanguageHeader(allocator, "NonSemanticShaderDebugInfo100", spvHeaderFile("unified1", "extinst.nonsemantic.shader.debuginfo.100.grammar.json"));
+
+    genSPIRVVendorTable(allocator, "spv-amd-shader-explicit-vertex-parameter", "...nil...");
+    genSPIRVVendorTable(allocator, "spv-amd-shader-trinary-minmax", "...nil...");
+    genSPIRVVendorTable(allocator, "spv-amd-gcn-shader", "...nil...");
+    genSPIRVVendorTable(allocator, "spv-amd-shader-ballot", "...nil...");
+    genSPIRVVendorTable(allocator, "debuginfo", "...nil...");
+    genSPIRVVendorTable(allocator, "opencl.debuginfo.100", "CLDEBUG100_");
+    genSPIRVVendorTable(allocator, "nonsemantic.clspvreflection", "...nil...");
+    genSPIRVVendorTable(allocator, "nonsemantic.shader.debuginfo.100", "SHDEBUG100_");
+
+    genSPIRVRegistryTables(allocator);
+
+    buildSPIRVVersion(allocator);
+}
+
+const BuildSPIRVGrammarStep = struct {
+    step: std.Build.Step,
+    b: *std.Build,
+
+    fn init(b: *std.Build) *BuildSPIRVGrammarStep
+    {
+        const build_grammar_step = b.allocator.create(BuildSPIRVGrammarStep) catch unreachable;
+
+        build_grammar_step.* = .{
+            .step = std.Build.Step.init(.{
+                .id = .custom,
+                .name = "generate grammar",
+                .owner = b,
+                .makeFn = &make,
+            }),
+            .b = b,
+        };
+
+        return build_grammar_step;
+    }
+
+    fn make(step_ptr: *std.Build.Step, prog_node: *std.Progress.Node) anyerror!void 
+    {
+        _ = prog_node;
+
+        const build_grammar_step = @fieldParentPtr(BuildSPIRVGrammarStep, "step", step_ptr);
+        const b = build_grammar_step.b;
+
+        // Zig will run build steps in parallel if possible, so if there were two invocations of
+        // then this function would be called in parallel. We're manipulating the FS here
+        // and so need to prevent that.
+        download_mutex.lock();
+        defer download_mutex.unlock();
+
+        generateSPIRVGrammar(b.allocator);
+    }
+};
 
 // find libs/DirectXShaderCompiler/tools/clang/lib/Lex | grep '\.cpp$' | xargs -I {} -n1 echo '"{}",' | pbcopy
 const tools_clang_lib_lex_sources = [_][]const u8{
@@ -2019,4 +2367,297 @@ const lib_dxilrootsignature_sources = [_][]const u8{
     "libs/DirectXShaderCompiler/lib/DxilRootSignature/DxilRootSignatureSerializer.cpp",
     "libs/DirectXShaderCompiler/lib/DxilRootSignature/DxilRootSignatureConvert.cpp",
     "libs/DirectXShaderCompiler/lib/DxilRootSignature/DxilRootSignatureValidator.cpp",
+};
+
+
+// SPIRV-Tools stuff
+// find libs/DirectXShaderCompiler/external/SPIRV-Tools/source | grep '\.cpp$' | xargs -I {} -n1 echo '"{}",' | pbcopy
+
+pub const lib_spirv = [_][]const u8{
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/RemoveBufferBlockVisitor.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/LiteralTypeVisitor.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/AlignmentSizeCalculator.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/RawBufferMethods.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/GlPerVertex.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/SpirvFunction.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/LowerTypeVisitor.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/SpirvInstruction.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/DeclResultIdMapper.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/SpirvEmitter.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/SpirvBuilder.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/FeatureManager.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/SpirvModule.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/BlockReadableOrder.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/SignaturePackingUtil.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/CapabilityVisitor.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/SpirvBasicBlock.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/NonUniformVisitor.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/RelaxedPrecisionVisitor.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/SpirvType.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/SortDebugInfoVisitor.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/SpirvContext.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/PreciseVisitor.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/EmitSpirvAction.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/PervertexInputVisitor.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/EmitVisitor.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/String.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/AstTypeProbe.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/DebugTypeVisitor.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/InitListHandler.cpp",
+};
+
+pub const spirv_tools = [_][]const u8{
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/spirv_reducer_options.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/spirv_validator_options.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/spirv_endian.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/table.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/text.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/spirv_fuzzer_options.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/parsed_operand.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/operand.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/assembly_grammar.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/text_handler.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opcode.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/pch_source.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/software_version.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/binary.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/ext_inst.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/print.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/disassemble.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/enum_string_mapping.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/spirv_optimizer_options.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/libspirv.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/diagnostic.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/spirv_target_env.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/name_mapper.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/extensions.cpp",
+};
+
+
+pub const spirv_tools_reduce = [_][]const u8{
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/reduce/structured_loop_to_selection_reduction_opportunity_finder.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/reduce/structured_construct_to_block_reduction_opportunity_finder.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/reduce/operand_to_undef_reduction_opportunity_finder.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/reduce/remove_block_reduction_opportunity_finder.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/reduce/change_operand_reduction_opportunity.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/reduce/remove_unused_struct_member_reduction_opportunity_finder.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/reduce/simple_conditional_branch_to_branch_opportunity_finder.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/reduce/remove_function_reduction_opportunity.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/reduce/merge_blocks_reduction_opportunity_finder.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/reduce/simple_conditional_branch_to_branch_reduction_opportunity.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/reduce/structured_construct_to_block_reduction_opportunity.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/reduce/reduction_opportunity.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/reduce/change_operand_to_undef_reduction_opportunity.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/reduce/remove_function_reduction_opportunity_finder.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/reduce/remove_selection_reduction_opportunity.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/reduce/operand_to_const_reduction_opportunity_finder.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/reduce/operand_to_dominating_id_reduction_opportunity_finder.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/reduce/remove_block_reduction_opportunity.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/reduce/reduction_pass.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/reduce/conditional_branch_to_simple_conditional_branch_reduction_opportunity.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/reduce/conditional_branch_to_simple_conditional_branch_opportunity_finder.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/reduce/remove_selection_reduction_opportunity_finder.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/reduce/pch_source_reduce.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/reduce/reduction_util.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/reduce/merge_blocks_reduction_opportunity.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/reduce/reducer.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/reduce/remove_struct_member_reduction_opportunity.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/reduce/structured_loop_to_selection_reduction_opportunity.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/reduce/reduction_opportunity_finder.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/reduce/remove_instruction_reduction_opportunity.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/reduce/remove_unused_instruction_reduction_opportunity_finder.cpp",
+};
+
+
+pub const spirv_tools_opt = [_][]const u8{
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/loop_unswitch_pass.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/eliminate_dead_output_stores_pass.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/dominator_tree.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/flatten_decoration_pass.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/convert_to_half_pass.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/loop_unroller.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/interface_var_sroa.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/wrap_opkill.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/inst_debug_printf_pass.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/liveness.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/eliminate_dead_io_components_pass.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/feature_manager.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/instrument_pass.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/scalar_replacement_pass.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/loop_dependence_helpers.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/redundancy_elimination.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/strip_nonsemantic_info_pass.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/aggressive_dead_code_elim_pass.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/fix_func_call_arguments.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/fold_spec_constant_op_and_composite_pass.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/dataflow.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/block_merge_util.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/pass.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/relax_float_ops_pass.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/interp_fixup_pass.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/instruction.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/folding_rules.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/inst_bindless_check_pass.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/ssa_rewrite_pass.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/inline_exhaustive_pass.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/amd_ext_to_khr.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/dead_branch_elim_pass.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/loop_dependence.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/eliminate_dead_constant_pass.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/simplification_pass.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/eliminate_dead_functions_pass.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/loop_fusion_pass.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/decoration_manager.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/debug_info_manager.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/basic_block.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/switch_descriptorset_pass.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/code_sink.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/fix_storage_class.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/convert_to_sampled_image_pass.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/graphics_robust_access_pass.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/inline_opaque_pass.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/strip_debug_info_pass.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/dominator_analysis.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/upgrade_memory_model.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/loop_peeling.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/register_pressure.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/unify_const_pass.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/replace_desc_array_access_using_var_index.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/analyze_live_input_pass.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/invocation_interlock_placement_pass.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/scalar_analysis.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/local_redundancy_elimination.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/inst_buff_addr_check_pass.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/const_folding_rules.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/trim_capabilities_pass.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/reduce_load_size.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/build_module.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/local_single_store_elim_pass.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/mem_pass.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/module.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/scalar_analysis_simplification.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/function.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/desc_sroa.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/def_use_manager.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/compact_ids_pass.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/workaround1209.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/instruction_list.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/loop_fission.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/strength_reduction_pass.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/remove_unused_interface_variables_pass.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/fold.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/ccp_pass.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/if_conversion.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/value_number_table.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/loop_descriptor.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/inline_pass.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/struct_cfg_analysis.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/composite.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/freeze_spec_constant_value_pass.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/cfg.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/ir_loader.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/licm_pass.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/replace_invalid_opc.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/propagator.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/types.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/private_to_local_pass.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/spread_volatile_semantics.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/dead_variable_elimination.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/loop_utils.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/local_access_chain_convert_pass.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/cfg_cleanup_pass.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/combine_access_chains.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/copy_prop_arrays.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/type_manager.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/ir_context.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/constants.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/remove_dontinline_pass.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/dead_insert_elim_pass.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/pass_manager.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/merge_return_pass.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/remove_duplicates_pass.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/eliminate_dead_functions_util.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/eliminate_dead_members_pass.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/control_dependence.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/vector_dce.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/optimizer.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/block_merge_pass.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/desc_sroa_util.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/local_single_block_elim_pass.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/set_spec_constant_default_value_pass.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/pch_source_opt.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/opt/loop_fusion.cpp",
+};  
+
+
+pub const spirv_tools_util = [_][]const u8{
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/util/bit_vector.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/util/parse_number.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/util/string_utils.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/util/timer.cpp",
+};
+
+
+pub const spirv_tools_lint = [_][]const u8{
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/lint/lint_divergent_derivatives.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/lint/linter.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/lint/divergence_analysis.cpp",
+};
+
+
+pub const spirv_tools_wasm = [_][]const u8{
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/wasm/spirv-tools.cpp",
+};
+
+
+pub const spirv_tools_link = [_][]const u8{
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/link/linker.cpp",
+};
+
+
+pub const spirv_tools_val = [_][]const u8{
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/val/validate_extensions.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/val/validate_conversion.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/val/validate_arithmetics.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/val/validate_primitives.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/val/validate_ray_tracing.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/val/validate_builtins.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/val/validate_atomics.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/val/validate_memory.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/val/instruction.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/val/validate_ray_tracing_reorder.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/val/validate_ray_query.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/val/validate_literals.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/val/construct.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/val/basic_block.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/val/validate.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/val/validate_small_type_uses.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/val/validate_instruction.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/val/validate_logicals.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/val/validate_execution_limitations.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/val/validate_mesh_shading.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/val/validate_capability.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/val/validate_decorations.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/val/validation_state.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/val/validate_function.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/val/function.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/val/validate_interfaces.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/val/validate_image.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/val/validate_constants.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/val/validate_derivatives.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/val/validate_cfg.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/val/validate_barriers.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/val/validate_mode_setting.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/val/validate_memory_semantics.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/val/validate_type.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/val/validate_misc.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/val/validate_debug.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/val/validate_bitwise.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/val/validate_adjacency.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/val/validate_annotation.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/val/validate_layout.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/val/validate_composites.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/val/validate_scopes.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/val/validate_non_uniform.cpp",
+    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/val/validate_id.cpp",
 };
