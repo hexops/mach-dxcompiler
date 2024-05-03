@@ -19,6 +19,8 @@ pub fn build(b: *Build) !void {
     const debug_symbols = b.option(bool, "debug_symbols", "Whether to produce detailed debug symbols (g0) or not. These increase binary size considerably.") orelse false;
     const build_shared = b.option(bool, "shared", "Build dxcompiler shared libraries") orelse false;
     const build_spirv = b.option(bool, "spirv", "Build spir-v compilation support") orelse false;
+    const skip_executables = b.option(bool, "skip_executables", "Skip building executables") orelse false;
+    const skip_tests = b.option(bool, "skip_tests", "Skip building tests") orelse false;
 
     const machdxcompiler: struct { lib: *std.Build.Step.Compile, lib_path: ?[]const u8 } = blk: {
         if (!from_source) {
@@ -297,6 +299,9 @@ pub fn build(b: *Build) !void {
         }
     };
 
+    if (skip_executables)
+        return;
+
     // Zig bindings
     const mach_dxcompiler = b.addModule("mach-dxcompiler", .{
         .root_source_file = .{ .path = "src/main.zig" },
@@ -307,6 +312,9 @@ pub fn build(b: *Build) !void {
 
     mach_dxcompiler.linkLibrary(machdxcompiler.lib);
     if (machdxcompiler.lib_path) |p| mach_dxcompiler.addLibraryPath(.{ .path = p });
+
+    if (skip_tests)
+        return;
 
     const main_tests = b.addTest(.{
         .name = "dxcompiler-tests",
