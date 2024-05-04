@@ -1077,7 +1077,7 @@ fn ensurePython(allocator: std.mem.Allocator) void
 
 const spirv_headers_path = prefix ++ "/external/SPIRV-Headers";
 const spirv_tools_path = prefix ++ "/external/SPIRV-Tools";
-const spirv_output_path = "generated-include/spirv-tools"
+const spirv_output_path = "generated-include/spirv-tools";
 
 const grammar_tables_script = spirv_tools_path ++ "/utils/generate_grammar_tables.py";
 
