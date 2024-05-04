@@ -11,6 +11,7 @@
 
 zig-cache/
 zig-out/
+spirv-include/
 /release/
 /debug/
 /build/

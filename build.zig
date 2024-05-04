@@ -489,6 +489,9 @@ fn addIncludes(step: *std.Build.Step.Compile) void {
     step.addIncludePath(.{ .path = prefix ++ "/include/llvm/Passes" });
     step.addIncludePath(.{ .path = prefix ++ "/include/dxc" });
     step.addIncludePath(.{ .path = prefix ++ "/external/DirectX-Headers/include/directx" });
+
+    // SPIR-V generated include stuff- should be OK not having it behind an option check
+    step.addIncludePath(.{ .path = "generated-include/spirv-tools" });
     
     const target = step.rootModuleTarget();
     if (target.os.tag != .windows) step.addIncludePath(.{ .path = prefix ++ "/external/DirectX-Headers/include/wsl/stubs" });
@@ -498,7 +501,7 @@ fn addIncludes(step: *std.Build.Step.Compile) void {
 fn addSPIRVIncludes(step: *std.Build.Step.Compile) void
 {
     // Generated SPIR-V headers get thrown in here
-    step.addIncludePath(.{ .path = "generated-include/" });
+    step.addIncludePath(.{ .path = "generated-include/spirv-tools" });
 
     step.addIncludePath(.{ .path = prefix ++ "/external/SPIRV-Tools" });
     step.addIncludePath(.{ .path = prefix ++ "/external/SPIRV-Tools/include" });
@@ -1074,6 +1077,7 @@ fn ensurePython(allocator: std.mem.Allocator) void
 
 const spirv_headers_path = prefix ++ "/external/SPIRV-Headers";
 const spirv_tools_path = prefix ++ "/external/SPIRV-Tools";
+const spirv_output_path = "generated-include/spirv-tools"
 
 const grammar_tables_script = spirv_tools_path ++ "/utils/generate_grammar_tables.py";
 
@@ -1238,7 +1242,7 @@ fn buildSPIRVVersion(allocator: std.mem.Allocator) void {
     const script = spirv_tools_path ++ "/utils/update_build_version.py";
 
     const changes_file = spirv_tools_path ++ "/CHANGES";
-    const inc_file = "generated-include/build-version.inc";
+    const inc_file = spirv_output_path ++ "/build-version.inc";
 
     const args = &[_][]const u8 {
         "python3", script,
