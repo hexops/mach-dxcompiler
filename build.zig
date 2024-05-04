@@ -228,65 +228,68 @@ pub fn build(b: *Build) !void {
             // TODO: investigate how projects/dxilconv/lib/DxbcConverter/DxbcConverterImpl.h is getting pulled
             // in, we can get rid of dxbc conversion presumably
 
-            // dxc.exe builds
-            const dxc_exe = b.addExecutable(.{
-                .name = "dxc",
-                .optimize = optimize,
-                .target = target,
-            });
-            const install_dxc_step = b.step("dxc", "Build and install dxc.exe");
-            install_dxc_step.dependOn(&b.addInstallArtifact(dxc_exe, .{}).step);
-            dxc_exe.addCSourceFile(.{
-                .file = .{ .path = prefix ++ "/tools/clang/tools/dxc/dxcmain.cpp" },
-                .flags = &.{"-std=c++17"},
-            });
-            dxc_exe.defineCMacro("NDEBUG", ""); // disable assertions
+            if (!skip_executables)
+            {
+                // dxc.exe builds
+                const dxc_exe = b.addExecutable(.{
+                    .name = "dxc",
+                    .optimize = optimize,
+                    .target = target,
+                });
+                const install_dxc_step = b.step("dxc", "Build and install dxc.exe");
+                install_dxc_step.dependOn(&b.addInstallArtifact(dxc_exe, .{}).step);
+                dxc_exe.addCSourceFile(.{
+                    .file = .{ .path = prefix ++ "/tools/clang/tools/dxc/dxcmain.cpp" },
+                    .flags = &.{"-std=c++17"},
+                });
+                dxc_exe.defineCMacro("NDEBUG", ""); // disable assertions
 
-            if (target.result.os.tag != .windows) dxc_exe.defineCMacro("HAVE_DLFCN_H", "1");
-            dxc_exe.addIncludePath(.{ .path = prefix ++ "/tools/clang/tools" });
-            dxc_exe.addIncludePath(.{ .path = prefix ++ "/include" });
-            addConfigHeaders(b, dxc_exe);
-            addIncludes(dxc_exe);
-            dxc_exe.addCSourceFile(.{
-                .file = .{ .path = prefix ++ "/tools/clang/tools/dxclib/dxc.cpp" },
-                .flags = cppflags.items,
-            });
-            b.installArtifact(dxc_exe);
-            dxc_exe.linkLibrary(lib);
+                if (target.result.os.tag != .windows) dxc_exe.defineCMacro("HAVE_DLFCN_H", "1");
+                dxc_exe.addIncludePath(.{ .path = prefix ++ "/tools/clang/tools" });
+                dxc_exe.addIncludePath(.{ .path = prefix ++ "/include" });
+                addConfigHeaders(b, dxc_exe);
+                addIncludes(dxc_exe);
+                dxc_exe.addCSourceFile(.{
+                    .file = .{ .path = prefix ++ "/tools/clang/tools/dxclib/dxc.cpp" },
+                    .flags = cppflags.items,
+                });
+                b.installArtifact(dxc_exe);
+                dxc_exe.linkLibrary(lib);
 
-            if (target.result.os.tag == .windows) {
-                // windows must be built with LTO disabled due to:
-                // https://github.com/ziglang/zig/issues/15958
-                dxc_exe.want_lto = false;
-                if (builtin.os.tag == .windows and target.result.abi == .msvc) {
-                    const msvc_lib_dir: ?[]const u8 = try @import("msvc.zig").MsvcLibDir.find(b.allocator);
+                if (target.result.os.tag == .windows) {
+                    // windows must be built with LTO disabled due to:
+                    // https://github.com/ziglang/zig/issues/15958
+                    dxc_exe.want_lto = false;
+                    if (builtin.os.tag == .windows and target.result.abi == .msvc) {
+                        const msvc_lib_dir: ?[]const u8 = try @import("msvc.zig").MsvcLibDir.find(b.allocator);
 
-                    // The MSVC lib dir looks like this:
-                    // C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.38.33130\Lib\x64
-                    // But we need the atlmfc lib dir:
-                    // C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.38.33130\atlmfc\lib\x64
-                    const msvc_dir = try std.fs.path.resolve(b.allocator, &.{ msvc_lib_dir.?, "..\\.." });
+                        // The MSVC lib dir looks like this:
+                        // C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.38.33130\Lib\x64
+                        // But we need the atlmfc lib dir:
+                        // C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.38.33130\atlmfc\lib\x64
+                        const msvc_dir = try std.fs.path.resolve(b.allocator, &.{ msvc_lib_dir.?, "..\\.." });
 
-                    const lib_dir_path = try std.mem.concat(b.allocator, u8, &.{
-                        msvc_dir,
-                        "\\atlmfc\\lib\\",
-                        if (target.result.cpu.arch == .aarch64) "arm64" else "x64",
-                    });
+                        const lib_dir_path = try std.mem.concat(b.allocator, u8, &.{
+                            msvc_dir,
+                            "\\atlmfc\\lib\\",
+                            if (target.result.cpu.arch == .aarch64) "arm64" else "x64",
+                        });
 
-                    const lib_path = try std.mem.concat(b.allocator, u8, &.{ lib_dir_path, "\\atls.lib" });
-                    const pdb_name = if (target.result.cpu.arch == .aarch64)
-                        "atls.arm64.pdb"
-                    else
-                        "atls.amd64.pdb";
-                    const pdb_path = try std.mem.concat(b.allocator, u8, &.{ lib_dir_path, "\\", pdb_name });
+                        const lib_path = try std.mem.concat(b.allocator, u8, &.{ lib_dir_path, "\\atls.lib" });
+                        const pdb_name = if (target.result.cpu.arch == .aarch64)
+                            "atls.arm64.pdb"
+                        else
+                            "atls.amd64.pdb";
+                        const pdb_path = try std.mem.concat(b.allocator, u8, &.{ lib_dir_path, "\\", pdb_name });
 
-                    // For some reason, msvc target needs atls.lib to be in the 'zig build' working directory.
-                    // Addomg tp the library path like this has no effect:
-                    dxc_exe.addLibraryPath(.{ .path = lib_dir_path });
-                    // So instead we must copy the lib into this directory:
-                    try std.fs.cwd().copyFile(lib_path, std.fs.cwd(), "atls.lib", .{});
-                    try std.fs.cwd().copyFile(pdb_path, std.fs.cwd(), pdb_name, .{});
-                    // This is probably a bug in the Zig linker.
+                        // For some reason, msvc target needs atls.lib to be in the 'zig build' working directory.
+                        // Addomg tp the library path like this has no effect:
+                        dxc_exe.addLibraryPath(.{ .path = lib_dir_path });
+                        // So instead we must copy the lib into this directory:
+                        try std.fs.cwd().copyFile(lib_path, std.fs.cwd(), "atls.lib", .{});
+                        try std.fs.cwd().copyFile(pdb_path, std.fs.cwd(), pdb_name, .{});
+                        // This is probably a bug in the Zig linker.
+                    }
                 }
             }
 
