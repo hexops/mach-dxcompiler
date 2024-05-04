@@ -1095,8 +1095,8 @@ fn genSPIRVCoreTables(allocator: std.mem.Allocator, comptime version: []const u8
     const core_json_file = spvHeaderFile(version, "spirv.core.grammar.json");
 
     // Outputs
-    const core_insts_file = "generated-include/core.insts-" ++ version ++ ".inc";
-    const operand_kinds_file = "generated-include/operand.kinds-" ++ version ++ ".inc";
+    const core_insts_file = spirv_output_path ++ "/core.insts-" ++ version ++ ".inc";
+    const operand_kinds_file = spirv_output_path ++ "/operand.kinds-" ++ version ++ ".inc";
 
     const args = &[_][]const u8 {
         "python3", grammar_tables_script,
@@ -1118,8 +1118,8 @@ fn genSPIRVCoreTables(allocator: std.mem.Allocator, comptime version: []const u8
 fn genSPIRVCoreEnums(allocator: std.mem.Allocator, comptime version: []const u8) void {
     const core_json_file = spvHeaderFile(version, "spirv.core.grammar.json");
 
-    const extension_enum_file = "generated-include/extension_enum.inc";
-    const extension_map_file = "generated-include/enum_string_mapping.inc";
+    const extension_enum_file = spirv_output_path ++ "/extension_enum.inc";
+    const extension_map_file = spirv_output_path ++ "/enum_string_mapping.inc";
 
     const args = &[_][]const u8 {
         "python3", grammar_tables_script,
@@ -1142,7 +1142,7 @@ fn genSPIRVGlslTables(allocator: std.mem.Allocator, comptime version: []const u8
     const core_json_file = spvHeaderFile(version, "spirv.core.grammar.json");
     const glsl_json_file = spvHeaderFile(version, "extinst.glsl.std.450.grammar.json");
 
-    const glsl_insts_file = "generated-include/glsl.std.450.insts.inc";
+    const glsl_insts_file = spirv_output_path ++ "/glsl.std.450.insts.inc";
 
     const args = &[_][]const u8 {
         "python3", grammar_tables_script,
@@ -1165,7 +1165,7 @@ fn genSPIRVOpenCLTables(allocator: std.mem.Allocator, comptime version: []const 
     const core_json_file = spvHeaderFile(version, "spirv.core.grammar.json");
     const opencl_json_file = spvHeaderFile(version, "extinst.opencl.std.100.grammar.json");
     
-    const opencl_insts_file = "generated-include/opencl.std.insts.inc";
+    const opencl_insts_file = spirv_output_path ++ "/opencl.std.insts.inc";
 
     const args = &[_][]const u8 {
         "python3", grammar_tables_script,
@@ -1186,7 +1186,7 @@ fn genSPIRVOpenCLTables(allocator: std.mem.Allocator, comptime version: []const 
 fn genSPIRVLanguageHeader(allocator: std.mem.Allocator, comptime name: []const u8, comptime grammar_file: []const u8) void {
     const script = spirv_tools_path ++ "/utils/generate_language_headers.py";
 
-    const extinst_output_path = "generated-include/" ++ name ++ ".h";
+    const extinst_output_path = spirv_output_path ++ "/" ++ name ++ ".h";
 
     const args = &[_][]const u8 {
         "python3", script,
@@ -1203,7 +1203,7 @@ fn genSPIRVLanguageHeader(allocator: std.mem.Allocator, comptime name: []const u
 
 fn genSPIRVVendorTable(allocator: std.mem.Allocator, comptime name: []const u8, comptime operand_kind_prefix: []const u8) void {
     const extinst_vendor_grammar = spirv_headers_path ++ "/include/spirv/unified1/extinst." ++ name ++ ".grammar.json";
-    const extinst_file = "generated-include/" ++ name ++ ".insts.inc";
+    const extinst_file = spirv_output_path ++ "/" ++ name ++ ".insts.inc";
 
     const args = &[_][]const u8 {
         "python3", grammar_tables_script,
@@ -1223,7 +1223,7 @@ fn genSPIRVRegistryTables(allocator: std.mem.Allocator) void {
     const script = spirv_tools_path ++ "/utils/generate_registry_tables.py";
 
     const xml_file = spirv_headers_path ++ "/include/spirv/spir-v.xml";
-    const inc_file = "generated-include/generators.inc";
+    const inc_file = spirv_output_path ++ "/generators.inc";
 
     const args = &[_][]const u8 {
         "python3", script,
