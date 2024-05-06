@@ -156,13 +156,11 @@ pub fn build(b: *Build) !void {
             // Build and link SPIRV-Tools
             if (build_spirv)
             {
-                // Ignore building tests 
                 const spirv_cpp_sources = 
                     spirv_tools ++
-                    spirv_tools_reduce ++
-                    spirv_tools_lint ++ 
-                    spirv_tools_link ++ 
                     spirv_tools_util ++
+                    spirv_tools_reduce ++
+                    spirv_tools_link ++ 
                     spirv_tools_val ++
                     // spirv_tools_wasm ++ // Wasm build support- requires emscripten toolchain
                     spirv_tools_opt;
@@ -173,6 +171,35 @@ pub fn build(b: *Build) !void {
                     .optimize = optimize,
                     .target = target,
                 });
+
+                if (target.result.os.tag == .windows) {
+                    spv_lib.defineCMacro("SPIRV_WINDOWS", "ON");
+                }
+                else if (target.result.os.tag == .linux) {
+                    spv_lib.defineCMacro("SPIRV_LINUX", "ON");
+                }
+                else if (target.result.os.tag == .macos) {
+                    spv_lib.defineCMacro("SPIRV_MAC", "ON");
+                }
+                else if (target.result.os.tag == .ios) {
+                    spv_lib.defineCMacro("SPIRV_IOS", "ON");
+                }
+                else if (target.result.os.tag == .tvos) {
+                    spv_lib.defineCMacro("SPIRV_TVOS", "ON");
+                }
+                else if (target.result.os.tag == .kfreebsd) {
+                    spv_lib.defineCMacro("SPIRV_FREEBSD", "ON");
+                }
+                else if (target.result.os.tag == .openbsd) {
+                    spv_lib.defineCMacro("SPIRV_OPENBSD", "ON");
+                }
+                else if (target.result.os.tag == .fuchsia) {
+                    spv_lib.defineCMacro("SPIRV_FUCHSIA", "ON");
+                }
+                else {
+                    log.err("Compilation target incompatible with SPIR-V.", .{});
+                    std.process.exit(1);
+                }
     
                 var build_grammar_step = BuildSPIRVGrammarStep.init(b);
                 spv_lib.step.dependOn(&build_grammar_step.step);
@@ -2602,12 +2629,6 @@ const spirv_tools_util = [_][]const u8{
     "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/util/parse_number.cpp",
     "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/util/string_utils.cpp",
     "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/util/timer.cpp",
-};
-
-const spirv_tools_lint = [_][]const u8{
-    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/lint/lint_divergent_derivatives.cpp",
-    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/lint/linter.cpp",
-    "libs/DirectXShaderCompiler/external/SPIRV-Tools/source/lint/divergence_analysis.cpp",
 };
 
 const spirv_tools_wasm = [_][]const u8{
