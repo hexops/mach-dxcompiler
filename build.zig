@@ -173,28 +173,28 @@ pub fn build(b: *Build) !void {
                 });
 
                 if (target.result.os.tag == .windows) {
-                    spv_lib.defineCMacro("SPIRV_WINDOWS", "ON");
+                    spv_lib.defineCMacro("SPIRV_WINDOWS", "");
                 }
                 else if (target.result.os.tag == .linux) {
-                    spv_lib.defineCMacro("SPIRV_LINUX", "ON");
+                    spv_lib.defineCMacro("SPIRV_LINUX", "");
                 }
                 else if (target.result.os.tag == .macos) {
-                    spv_lib.defineCMacro("SPIRV_MAC", "ON");
+                    spv_lib.defineCMacro("SPIRV_MAC", "");
                 }
                 else if (target.result.os.tag == .ios) {
-                    spv_lib.defineCMacro("SPIRV_IOS", "ON");
+                    spv_lib.defineCMacro("SPIRV_IOS", "");
                 }
                 else if (target.result.os.tag == .tvos) {
-                    spv_lib.defineCMacro("SPIRV_TVOS", "ON");
+                    spv_lib.defineCMacro("SPIRV_TVOS", "");
                 }
                 else if (target.result.os.tag == .kfreebsd) {
-                    spv_lib.defineCMacro("SPIRV_FREEBSD", "ON");
+                    spv_lib.defineCMacro("SPIRV_FREEBSD", "");
                 }
                 else if (target.result.os.tag == .openbsd) {
-                    spv_lib.defineCMacro("SPIRV_OPENBSD", "ON");
+                    spv_lib.defineCMacro("SPIRV_OPENBSD", "");
                 }
                 else if (target.result.os.tag == .fuchsia) {
-                    spv_lib.defineCMacro("SPIRV_FUCHSIA", "ON");
+                    spv_lib.defineCMacro("SPIRV_FUCHSIA", "");
                 }
                 else {
                     log.err("Compilation target incompatible with SPIR-V.", .{});
@@ -209,14 +209,14 @@ pub fn build(b: *Build) !void {
                     .flags = cppflags.items,
                 });
 
-                spv_lib.defineCMacro("SPIRV_COLOR_TERMINAL", "ON"); // Pretty lights by default
+                spv_lib.defineCMacro("SPIRV_COLOR_TERMINAL", ""); // Pretty lights by default
 
                 addSPIRVIncludes(spv_lib);
                 linkMachDxcDependencies(spv_lib);
 
                 b.installArtifact(spv_lib);
     
-                lib.defineCMacro("ENABLE_SPIRV_CODEGEN", "ON");
+                lib.defineCMacro("ENABLE_SPIRV_CODEGEN", "");
 
                 addSPIRVIncludes(lib);
 
@@ -320,10 +320,7 @@ pub fn build(b: *Build) !void {
                 }
             }
 
-            if (build_shared)
-            {
-                buildShared(b, lib, optimize, target);
-            }
+            if (build_shared) buildShared(b, lib, optimize, target);
 
             break :blk .{ .lib = lib, .lib_path = null };
         }

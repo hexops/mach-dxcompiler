@@ -15,7 +15,15 @@ pub const Compiler = struct {
     }
 
     pub fn compile(compiler: Compiler, code: []const u8, args: []const [*:0]const u8) Result {
-        const result = c.machDxcCompile(compiler.handle, code.ptr, code.len, args.ptr, args.len, null);
+        var options: c.MachDxcCompileOptions = .{
+            .code = code.ptr,
+            .code_len = code.len,
+            .args = args.ptr,
+            .args_len = args.len,
+            .include_callbacks = null,
+        };
+
+        const result = c.machDxcCompile(compiler.handle, @ptrCast(&options));
         return .{ .handle = result };
     }
 

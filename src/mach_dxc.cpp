@@ -127,18 +127,14 @@ MACH_EXPORT void machDxcDeinit(MachDxcCompiler compiler) {
 //---------------------
 MACH_EXPORT MachDxcCompileResult machDxcCompile(
     MachDxcCompiler compiler,
-    char const* code,
-    size_t code_len,
-    char const* const* args,
-    size_t args_len,
-    MachDxcIncludeCallbacks* include_callbacks
+    MachDxcCompileOptions* options
 ) {
     CComPtr<IDxcCompiler3> dxcInstance = CComPtr(reinterpret_cast<IDxcCompiler3*>(compiler));
 
     CComPtr<IDxcUtils> pUtils;
     DxcCreateInstance(CLSID_DxcUtils, IID_PPV_ARGS(&pUtils));
     CComPtr<IDxcBlobEncoding> pSource;
-    pUtils->CreateBlob(code, code_len, CP_UTF8, &pSource);
+    pUtils->CreateBlob(options->code, options->code_len, CP_UTF8, &pSource);
 
     DxcBuffer sourceBuffer;
     sourceBuffer.Ptr = pSource->GetBufferPointer();
@@ -146,29 +142,28 @@ MACH_EXPORT MachDxcCompileResult machDxcCompile(
     sourceBuffer.Encoding = 0;
 
     // We have args in char form, but dxcInstance->Compile expects wchar_t form.
-    LPCWSTR* arguments = (LPCWSTR*)malloc(sizeof(LPCWSTR) * args_len);
+    LPCWSTR* arguments = (LPCWSTR*)malloc(sizeof(LPCWSTR) * options->args_len);
     wchar_t* wtext_buf = (wchar_t*)malloc(4096);
     wchar_t* wtext_cursor = wtext_buf;
     assert(arguments);
     assert(wtext_buf);
 
-    for (int i=0; i < args_len; i++) {
+    for (int i=0; i < options->args_len; i++) {
         size_t available = 4096 / sizeof(wchar_t) - (wtext_cursor - wtext_buf);
-        size_t written = std::mbstowcs(wtext_cursor, args[i], available);
+        size_t written = std::mbstowcs(wtext_cursor, options->args[i], available);
         arguments[i] = wtext_cursor;
         wtext_cursor += written + 1;
     }
 
-    
     MachDxcIncludeHandler* handler = nullptr;
-    if (include_callbacks != nullptr) // If we have include callbacks, create a handler.
-        handler = new MachDxcIncludeHandler(include_callbacks, pUtils);
+    if (options->include_callbacks != nullptr) // Leave include handler as default (nullptr) unless there's available callbacks
+        handler = new MachDxcIncludeHandler(options->include_callbacks, pUtils);
 
     CComPtr<IDxcResult> pCompileResult;
     HRESULT hr = dxcInstance->Compile(
         &sourceBuffer,
         arguments,
-        (uint32_t)args_len,
+        (uint32_t)options->args_len,
         handler,
         IID_PPV_ARGS(&pCompileResult)
     );

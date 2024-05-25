@@ -51,6 +51,18 @@ typedef struct MachDxcIncludeCallbacks {
 } MachDxcIncludeCallbacks;
 
 
+typedef struct MachDxcCompileOptions {
+    // Required
+    char const* code;
+    size_t code_len;
+    char const* const* args;
+    size_t args_len;
+
+    // Optional
+    MachDxcIncludeCallbacks* include_callbacks; // nullable
+} MachDxcCompileOptions;
+
+
 //----------------
 // MachDxcCompiler
 //----------------
@@ -72,11 +84,7 @@ MACH_EXPORT void machDxcDeinit(MachDxcCompiler compiler);
 /// Invoke machDxcCompileResultDeinit when done with the result.
 MACH_EXPORT MachDxcCompileResult machDxcCompile(
     MachDxcCompiler compiler,
-    char const* code,
-    size_t code_len,
-    char const* const* args,
-    size_t args_len,
-    MachDxcIncludeCallbacks* include_callbacks
+    MachDxcCompileOptions* options
 );
 
 /// Returns an error object, or null in the case of success.
