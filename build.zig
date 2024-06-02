@@ -3,7 +3,7 @@ const builtin = @import("builtin");
 const Build = std.Build;
 
 /// The latest binary release available at https://github.com/hexops/mach-dxcompiler/releases
-const latest_binary_release = "2024.03.09+d19dd6d.1";
+const latest_binary_release = "2024.06.02+6e2c403.1";
 
 /// When building from source, which repository and revision to clone.
 const source_repository = "https://github.com/hexops/DirectXShaderCompiler";
@@ -37,7 +37,7 @@ pub fn build(b: *Build) !void {
             linkage.step.dependOn(&download_step.step);
 
             const cache_dir = binaryCacheDirPath(b, target.result, optimize) catch |err| std.debug.panic("unable to construct binary cache dir path: {}", .{err});
-            linkage.addLibraryPath(.{ .path = cache_dir });
+            linkage.addLibraryPath(.{ .cwd_relative = cache_dir });
             linkage.linkSystemLibrary("machdxcompiler");
             linkMachDxcDependenciesModule(&linkage.root_module);
 
@@ -66,7 +66,7 @@ pub fn build(b: *Build) !void {
             lib.step.dependOn(&download_step.step);
 
             lib.addCSourceFile(.{
-                .file = .{ .path = "src/mach_dxc.cpp" },
+                .file = b.path("src/mach_dxc.cpp"),
                 .flags = &.{
                     "-fms-extensions", // __uuidof and friends (on non-windows targets)
                 },
@@ -76,7 +76,7 @@ pub fn build(b: *Build) !void {
             // The Windows 10 SDK winrt/wrl/client.h is incompatible with clang due to #pragma pack usages
             // (unclear why), so instead we use the wrl/client.h headers from https://github.com/ziglang/zig/tree/225fe6ddbfae016395762850e0cd5c51f9e7751c/lib/libc/include/any-windows-any
             // which seem to work fine.
-            if (target.result.os.tag == .windows and target.result.abi == .msvc) lib.addIncludePath(.{ .path = "msvc/" });
+            if (target.result.os.tag == .windows and target.result.abi == .msvc) lib.addIncludePath(b.path("msvc/"));
 
             var cflags = std.ArrayList([]const u8).init(b.allocator);
             var cppflags = std.ArrayList([]const u8).init(b.allocator);
@@ -100,7 +100,7 @@ pub fn build(b: *Build) !void {
             try cppflags.appendSlice(base_flags);
 
             addConfigHeaders(b, lib);
-            addIncludes(lib);
+            addIncludes(b, lib);
 
             const cpp_sources =
                 tools_clang_lib_lex_sources ++
@@ -211,14 +211,14 @@ pub fn build(b: *Build) !void {
 
                 spv_lib.defineCMacro("SPIRV_COLOR_TERMINAL", ""); // Pretty lights by default
 
-                addSPIRVIncludes(spv_lib);
+                addSPIRVIncludes(b, spv_lib);
                 linkMachDxcDependencies(spv_lib);
 
                 b.installArtifact(spv_lib);
     
                 lib.defineCMacro("ENABLE_SPIRV_CODEGEN", "");
 
-                addSPIRVIncludes(lib);
+                addSPIRVIncludes(b, lib);
 
                 // Add clang SPIRV tooling sources
                 lib.addCSourceFiles(.{
@@ -248,7 +248,7 @@ pub fn build(b: *Build) !void {
             }
 
             linkMachDxcDependencies(lib);
-            lib.addIncludePath(.{ .path = "src" });
+            lib.addIncludePath(b.path("src"));
 
             // TODO: investigate SSE2 #define / cmake option for CPU target
             //
@@ -266,18 +266,18 @@ pub fn build(b: *Build) !void {
                 const install_dxc_step = b.step("dxc", "Build and install dxc.exe");
                 install_dxc_step.dependOn(&b.addInstallArtifact(dxc_exe, .{}).step);
                 dxc_exe.addCSourceFile(.{
-                    .file = .{ .path = prefix ++ "/tools/clang/tools/dxc/dxcmain.cpp" },
+                    .file = b.path(prefix ++ "/tools/clang/tools/dxc/dxcmain.cpp"),
                     .flags = &.{"-std=c++17"},
                 });
                 dxc_exe.defineCMacro("NDEBUG", ""); // disable assertions
 
                 if (target.result.os.tag != .windows) dxc_exe.defineCMacro("HAVE_DLFCN_H", "1");
-                dxc_exe.addIncludePath(.{ .path = prefix ++ "/tools/clang/tools" });
-                dxc_exe.addIncludePath(.{ .path = prefix ++ "/include" });
+                dxc_exe.addIncludePath(b.path(prefix ++ "/tools/clang/tools"));
+                dxc_exe.addIncludePath(b.path(prefix ++ "/include"));
                 addConfigHeaders(b, dxc_exe);
-                addIncludes(dxc_exe);
+                addIncludes(b, dxc_exe);
                 dxc_exe.addCSourceFile(.{
-                    .file = .{ .path = prefix ++ "/tools/clang/tools/dxclib/dxc.cpp" },
+                    .file = b.path(prefix ++ "/tools/clang/tools/dxclib/dxc.cpp"),
                     .flags = cppflags.items,
                 });
                 b.installArtifact(dxc_exe);
@@ -311,7 +311,7 @@ pub fn build(b: *Build) !void {
 
                         // For some reason, msvc target needs atls.lib to be in the 'zig build' working directory.
                         // Addomg tp the library path like this has no effect:
-                        dxc_exe.addLibraryPath(.{ .path = lib_dir_path });
+                        dxc_exe.addLibraryPath(b.path(lib_dir_path));
                         // So instead we must copy the lib into this directory:
                         try std.fs.cwd().copyFile(lib_path, std.fs.cwd(), "atls.lib", .{});
                         try std.fs.cwd().copyFile(pdb_path, std.fs.cwd(), pdb_name, .{});
@@ -331,27 +331,28 @@ pub fn build(b: *Build) !void {
 
     // Zig bindings
     const mach_dxcompiler = b.addModule("mach-dxcompiler", .{
-        .root_source_file = .{ .path = "src/main.zig" },
+        .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
     });
-    mach_dxcompiler.addIncludePath(.{ .path = "src" });
+    mach_dxcompiler.addIncludePath(b.path("src"));
 
     mach_dxcompiler.linkLibrary(machdxcompiler.lib);
-    if (machdxcompiler.lib_path) |p| mach_dxcompiler.addLibraryPath(.{ .path = p });
+
+    if (machdxcompiler.lib_path) |p| mach_dxcompiler.addLibraryPath(.{ .cwd_relative = p });
 
     if (skip_tests)
         return;
 
     const main_tests = b.addTest(.{
         .name = "dxcompiler-tests",
-        .root_source_file = .{ .path = "src/main.zig" },
+        .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
     });
-    main_tests.addIncludePath(.{ .path = "src" });
+    main_tests.addIncludePath(b.path("src"));
     main_tests.linkLibrary(machdxcompiler.lib);
-    if (machdxcompiler.lib_path) |p| main_tests.addLibraryPath(.{ .path = p });
+    if (machdxcompiler.lib_path) |p| main_tests.addLibraryPath(.{ .cwd_relative = p });
 
     b.installArtifact(main_tests);
     const test_step = b.step("test", "Run library tests");
@@ -408,7 +409,7 @@ fn addConfigHeaders(b: *Build, step: *std.Build.Step.Compile) void {
     // /tools/clang/include/clang/Config/config.h.cmake
     step.addConfigHeader(b.addConfigHeader(
         .{
-            .style = .{ .cmake = .{ .path = "config-headers/tools/clang/include/clang/Config/config.h.cmake" } },
+            .style = .{ .cmake = b.path("config-headers/tools/clang/include/clang/Config/config.h.cmake") },
             .include_path = "clang/Config/config.h",
         },
         .{},
@@ -417,7 +418,7 @@ fn addConfigHeaders(b: *Build, step: *std.Build.Step.Compile) void {
     // /include/llvm/Config/AsmParsers.def.in
     step.addConfigHeader(b.addConfigHeader(
         .{
-            .style = .{ .cmake = .{ .path = "config-headers/include/llvm/Config/AsmParsers.def.in" } },
+            .style = .{ .cmake = b.path("config-headers/include/llvm/Config/AsmParsers.def.in") },
             .include_path = "llvm/Config/AsmParsers.def",
         },
         .{},
@@ -426,7 +427,7 @@ fn addConfigHeaders(b: *Build, step: *std.Build.Step.Compile) void {
     // /include/llvm/Config/Disassemblers.def.in
     step.addConfigHeader(b.addConfigHeader(
         .{
-            .style = .{ .cmake = .{ .path = "config-headers/include/llvm/Config/Disassemblers.def.in" } },
+            .style = .{ .cmake = b.path("config-headers/include/llvm/Config/Disassemblers.def.in") },
             .include_path = "llvm/Config/Disassemblers.def",
         },
         .{},
@@ -435,7 +436,7 @@ fn addConfigHeaders(b: *Build, step: *std.Build.Step.Compile) void {
     // /include/llvm/Config/Targets.def.in
     step.addConfigHeader(b.addConfigHeader(
         .{
-            .style = .{ .cmake = .{ .path = "config-headers/include/llvm/Config/Targets.def.in" } },
+            .style = .{ .cmake = b.path("config-headers/include/llvm/Config/Targets.def.in") },
             .include_path = "llvm/Config/Targets.def",
         },
         .{},
@@ -444,7 +445,7 @@ fn addConfigHeaders(b: *Build, step: *std.Build.Step.Compile) void {
     // /include/llvm/Config/AsmPrinters.def.in
     step.addConfigHeader(b.addConfigHeader(
         .{
-            .style = .{ .cmake = .{ .path = "config-headers/include/llvm/Config/AsmPrinters.def.in" } },
+            .style = .{ .cmake = b.path("config-headers/include/llvm/Config/AsmPrinters.def.in") },
             .include_path = "llvm/Config/AsmPrinters.def",
         },
         .{},
@@ -453,7 +454,7 @@ fn addConfigHeaders(b: *Build, step: *std.Build.Step.Compile) void {
     // /include/llvm/Support/DataTypes.h.cmake
     step.addConfigHeader(b.addConfigHeader(
         .{
-            .style = .{ .cmake = .{ .path = "config-headers/include/llvm/Support/DataTypes.h.cmake" } },
+            .style = .{ .cmake = b.path("config-headers/include/llvm/Support/DataTypes.h.cmake") },
             .include_path = "llvm/Support/DataTypes.h",
         },
         .{
@@ -467,7 +468,7 @@ fn addConfigHeaders(b: *Build, step: *std.Build.Step.Compile) void {
     // /include/llvm/Config/abi-breaking.h.cmake
     step.addConfigHeader(b.addConfigHeader(
         .{
-            .style = .{ .cmake = .{ .path = "config-headers/include/llvm/Config/abi-breaking.h.cmake" } },
+            .style = .{ .cmake = b.path("config-headers/include/llvm/Config/abi-breaking.h.cmake") },
             .include_path = "llvm/Config/abi-breaking.h",
         },
         .{},
@@ -480,7 +481,7 @@ fn addConfigHeaders(b: *Build, step: *std.Build.Step.Compile) void {
     // /include/dxc/config.h.cmake
     step.addConfigHeader(b.addConfigHeader(
         .{
-            .style = .{ .cmake = .{ .path = "config-headers/include/dxc/config.h.cmake" } },
+            .style = .{ .cmake = b.path("config-headers/include/dxc/config.h.cmake") },
             .include_path = "dxc/config.h",
         },
         .{
@@ -489,52 +490,52 @@ fn addConfigHeaders(b: *Build, step: *std.Build.Step.Compile) void {
     ));
 }
 
-fn addIncludes(step: *std.Build.Step.Compile) void {
+fn addIncludes(b: *Build, step: *std.Build.Step.Compile) void {
     // TODO: replace unofficial external/DIA submodule with something else (or eliminate dep on it)
-    step.addIncludePath(.{ .path = prefix ++ "/external/DIA/include" });
+    step.addIncludePath(b.path(prefix ++ "/external/DIA/include"));
     // TODO: replace generated-include with logic to actually generate this code
-    step.addIncludePath(.{ .path = "generated-include/" });
-    step.addIncludePath(.{ .path = prefix ++ "/tools/clang/include" });
-    step.addIncludePath(.{ .path = prefix ++ "/include" });
-    step.addIncludePath(.{ .path = prefix ++ "/include/llvm" });
-    step.addIncludePath(.{ .path = prefix ++ "/include/llvm/llvm_assert" });
-    step.addIncludePath(.{ .path = prefix ++ "/include/llvm/Bitcode" });
-    step.addIncludePath(.{ .path = prefix ++ "/include/llvm/IR" });
-    step.addIncludePath(.{ .path = prefix ++ "/include/llvm/IRReader" });
-    step.addIncludePath(.{ .path = prefix ++ "/include/llvm/Linker" });
-    step.addIncludePath(.{ .path = prefix ++ "/include/llvm/Analysis" });
-    step.addIncludePath(.{ .path = prefix ++ "/include/llvm/Transforms" });
-    step.addIncludePath(.{ .path = prefix ++ "/include/llvm/Transforms/Utils" });
-    step.addIncludePath(.{ .path = prefix ++ "/include/llvm/Transforms/InstCombine" });
-    step.addIncludePath(.{ .path = prefix ++ "/include/llvm/Transforms/IPO" });
-    step.addIncludePath(.{ .path = prefix ++ "/include/llvm/Transforms/Scalar" });
-    step.addIncludePath(.{ .path = prefix ++ "/include/llvm/Transforms/Vectorize" });
-    step.addIncludePath(.{ .path = prefix ++ "/include/llvm/Target" });
-    step.addIncludePath(.{ .path = prefix ++ "/include/llvm/ProfileData" });
-    step.addIncludePath(.{ .path = prefix ++ "/include/llvm/Option" });
-    step.addIncludePath(.{ .path = prefix ++ "/include/llvm/PassPrinters" });
-    step.addIncludePath(.{ .path = prefix ++ "/include/llvm/Passes" });
-    step.addIncludePath(.{ .path = prefix ++ "/include/dxc" });
-    step.addIncludePath(.{ .path = prefix ++ "/external/DirectX-Headers/include/directx" });
+    step.addIncludePath(b.path("generated-include/"));
+    step.addIncludePath(b.path(prefix ++ "/tools/clang/include"));
+    step.addIncludePath(b.path(prefix ++ "/include"));
+    step.addIncludePath(b.path(prefix ++ "/include/llvm"));
+    step.addIncludePath(b.path(prefix ++ "/include/llvm/llvm_assert"));
+    step.addIncludePath(b.path(prefix ++ "/include/llvm/Bitcode"));
+    step.addIncludePath(b.path(prefix ++ "/include/llvm/IR"));
+    step.addIncludePath(b.path(prefix ++ "/include/llvm/IRReader"));
+    step.addIncludePath(b.path(prefix ++ "/include/llvm/Linker"));
+    step.addIncludePath(b.path(prefix ++ "/include/llvm/Analysis"));
+    step.addIncludePath(b.path(prefix ++ "/include/llvm/Transforms"));
+    step.addIncludePath(b.path(prefix ++ "/include/llvm/Transforms/Utils"));
+    step.addIncludePath(b.path(prefix ++ "/include/llvm/Transforms/InstCombine"));
+    step.addIncludePath(b.path(prefix ++ "/include/llvm/Transforms/IPO"));
+    step.addIncludePath(b.path(prefix ++ "/include/llvm/Transforms/Scalar"));
+    step.addIncludePath(b.path(prefix ++ "/include/llvm/Transforms/Vectorize"));
+    step.addIncludePath(b.path(prefix ++ "/include/llvm/Target"));
+    step.addIncludePath(b.path(prefix ++ "/include/llvm/ProfileData"));
+    step.addIncludePath(b.path(prefix ++ "/include/llvm/Option"));
+    step.addIncludePath(b.path(prefix ++ "/include/llvm/PassPrinters"));
+    step.addIncludePath(b.path(prefix ++ "/include/llvm/Passes"));
+    step.addIncludePath(b.path(prefix ++ "/include/dxc"));
+    step.addIncludePath(b.path(prefix ++ "/external/DirectX-Headers/include/directx"));
 
     // SPIR-V generated include stuff- should be OK not having it behind an option check
-    step.addIncludePath(.{ .path = "generated-include/spirv-tools" });
+    step.addIncludePath(b.path("generated-include/spirv-tools"));
     
     const target = step.rootModuleTarget();
-    if (target.os.tag != .windows) step.addIncludePath(.{ .path = prefix ++ "/external/DirectX-Headers/include/wsl/stubs" });
+    if (target.os.tag != .windows) step.addIncludePath(b.path(prefix ++ "/external/DirectX-Headers/include/wsl/stubs"));
 }
 
 
-fn addSPIRVIncludes(step: *std.Build.Step.Compile) void
+fn addSPIRVIncludes(b: *Build, step: *std.Build.Step.Compile) void
 {
     // Generated SPIR-V headers get thrown in here
-    step.addIncludePath(.{ .path = "generated-include/spirv-tools" });
+    step.addIncludePath(b.path("generated-include/spirv-tools"));
 
-    step.addIncludePath(.{ .path = prefix ++ "/external/SPIRV-Tools" });
-    step.addIncludePath(.{ .path = prefix ++ "/external/SPIRV-Tools/include" });
-    step.addIncludePath(.{ .path = prefix ++ "/external/SPIRV-Tools/source" });
+    step.addIncludePath(b.path(prefix ++ "/external/SPIRV-Tools"));
+    step.addIncludePath(b.path(prefix ++ "/external/SPIRV-Tools/include"));
+    step.addIncludePath(b.path(prefix ++ "/external/SPIRV-Tools/source"));
 
-    step.addIncludePath(.{ .path = prefix ++ "/external/SPIRV-Headers/include" });
+    step.addIncludePath(b.path(prefix ++ "/external/SPIRV-Headers/include"));
 }
 
 
@@ -701,11 +702,11 @@ fn addConfigHeaderLLVMConfig(b: *Build, target: std.Target, which: anytype) *std
 
     return switch (which) {
         .llvm_config_h => b.addConfigHeader(.{
-            .style = .{ .cmake = .{ .path = "config-headers/include/llvm/Config/llvm-config.h.cmake" } },
+            .style = .{ .cmake = b.path("config-headers/include/llvm/Config/llvm-config.h.cmake") },
             .include_path = "llvm/Config/llvm-config.h",
         }, llvm_config_h),
         .config_h => b.addConfigHeader(.{
-            .style = .{ .cmake = .{ .path = "config-headers/include/llvm/Config/config.h.cmake" } },
+            .style = .{ .cmake = b.path("config-headers/include/llvm/Config/config.h.cmake") },
             .include_path = "llvm/Config/config.h",
         }, config_h),
         else => unreachable,
@@ -714,7 +715,7 @@ fn addConfigHeaderLLVMConfig(b: *Build, target: std.Target, which: anytype) *std
 
 fn ensureCommandExists(allocator: std.mem.Allocator, name: []const u8, exist_check: []const u8) bool 
 {
-    const result = std.ChildProcess.run(.{
+    const result = std.process.Child.run(.{
         .allocator = allocator,
         .argv = &[_][]const u8{ name, exist_check },
         .cwd = ".",
@@ -771,7 +772,7 @@ fn ensureGitRepoCloned(allocator: std.mem.Allocator, clone_url: []const u8, revi
 }
 
 fn getCurrentGitRevision(allocator: std.mem.Allocator, cwd: []const u8) ![]const u8 {
-    const result = try std.ChildProcess.run(.{ .allocator = allocator, .argv = &.{ "git", "rev-parse", "HEAD" }, .cwd = cwd });
+    const result = try std.process.Child.run(.{ .allocator = allocator, .argv = &.{ "git", "rev-parse", "HEAD" }, .cwd = cwd });
     allocator.free(result.stderr);
     if (result.stdout.len > 0) return result.stdout[0 .. result.stdout.len - 1]; // trim newline
     return result.stdout;
@@ -795,7 +796,7 @@ fn exec(allocator: std.mem.Allocator, argv: []const []const u8, cwd: []const u8)
     }
     log.info("{s}", .{buf.items});
 
-    var child = std.ChildProcess.init(argv, allocator);
+    var child = std.process.Child.init(argv, allocator);
     child.cwd = cwd;
     _ = try child.spawnAndWait();
 }
@@ -817,7 +818,7 @@ fn Merge(comptime a: type, comptime b: type) type {
 
     return @Type(std.builtin.Type{
         .Struct = .{
-            .layout = .Auto,
+            .layout = .auto,
             .fields = a_fields ++ b_fields,
             .decls = &.{},
             .is_tuple = false,
@@ -852,7 +853,7 @@ const DownloadSourceStep = struct {
         download_step.* = .{
             .step = std.Build.Step.init(.{
                 .id = .custom,
-                .name = "download",
+                .name = "download github.com/hexops/DirectXShaderCompiler source",
                 .owner = b,
                 .makeFn = &make,
             }),
@@ -861,9 +862,9 @@ const DownloadSourceStep = struct {
         return download_step;
     }
 
-    fn make(step_ptr: *std.Build.Step, prog_node: *std.Progress.Node) anyerror!void {
+    fn make(step_ptr: *std.Build.Step, prog_node: std.Progress.Node) anyerror!void {
         _ = prog_node;
-        const download_step = @fieldParentPtr(DownloadSourceStep, "step", step_ptr);
+        const download_step: *DownloadSourceStep = @fieldParentPtr("step", step_ptr);
         const b = download_step.b;
 
         // Zig will run build steps in parallel if possible, so if there were two invocations of
@@ -932,7 +933,7 @@ const DownloadBinaryStep = struct {
             .optimize = optimize,
             .step = std.Build.Step.init(.{
                 .id = .custom,
-                .name = "download",
+                .name = "download mach-dxcompiler prebuilt binary",
                 .owner = b,
                 .makeFn = &make,
             }),
@@ -941,9 +942,9 @@ const DownloadBinaryStep = struct {
         return download_step;
     }
 
-    fn make(step_ptr: *std.Build.Step, prog_node: *std.Progress.Node) anyerror!void {
+    fn make(step_ptr: *std.Build.Step, prog_node: std.Progress.Node) anyerror!void {
         _ = prog_node;
-        const download_step = @fieldParentPtr(DownloadBinaryStep, "step", step_ptr);
+        const download_step: *DownloadBinaryStep = @fieldParentPtr("step", step_ptr);
         const b = download_step.b;
         const target = download_step.target;
         const optimize = download_step.optimize;
@@ -1026,7 +1027,7 @@ fn downloadExtractTarball(
     });
 
     // Unpack tarball
-    var diagnostics: std.tar.Options.Diagnostics = .{ .allocator = gpa };
+    var diagnostics: std.tar.Diagnostics = .{ .allocator = gpa };
     defer diagnostics.deinit();
     std.tar.pipeToFileSystem(out_dir, decompressor.reader(), .{
         .diagnostics = &diagnostics,
@@ -1337,7 +1338,7 @@ const BuildSPIRVGrammarStep = struct {
     {
         _ = prog_node;
 
-        const build_grammar_step = @fieldParentPtr(BuildSPIRVGrammarStep, "step", step_ptr);
+        const build_grammar_step: *BuildSPIRVGrammarStep = @fieldParentPtr("step", step_ptr);
         const b = build_grammar_step.b;
 
         // Zig will run build steps in parallel if possible, so if there were two invocations of
