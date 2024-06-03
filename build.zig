@@ -799,7 +799,7 @@ const DownloadSourceStep = struct {
         return download_step;
     }
 
-    fn make(step_ptr: *std.Build.Step, prog_node: *std.Progress.Node) anyerror!void {
+    fn make(step_ptr: *std.Build.Step, prog_node: std.Progress.Node) anyerror!void {
         _ = prog_node;
         const download_step: *DownloadSourceStep = @fieldParentPtr("step", step_ptr);
         const b = download_step.b;
@@ -879,7 +879,7 @@ const DownloadBinaryStep = struct {
         return download_step;
     }
 
-    fn make(step_ptr: *std.Build.Step, prog_node: *std.Progress.Node) anyerror!void {
+    fn make(step_ptr: *std.Build.Step, prog_node: std.Progress.Node) anyerror!void {
         _ = prog_node;
         const download_step: *DownloadBinaryStep = @fieldParentPtr("step", step_ptr);
         const b = download_step.b;
