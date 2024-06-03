@@ -9,7 +9,7 @@
 # Cheers!
 # -andrewrk
 
-.zig-cache/
+zig-cache/
 zig-out/
 /release/
 /debug/
@@ -18,7 +18,6 @@ zig-out/
 /docgen_tmp/
 
 libs/DirectXShaderCompiler
-generated-include/spirv-tools/
 
 atls.lib
 atls.arm64.pdb
