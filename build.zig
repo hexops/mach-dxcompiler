@@ -313,7 +313,11 @@ fn buildShared(b: *Build, lib: *Build.Step.Compile, optimize: std.builtin.Optimi
 
     sharedlib.addCSourceFile(.{
         .file = b.path("src/shared_main.cpp"),
+        .flags = &.{ "-std=c++17", "-dynamic" },
     });
+
+    sharedlib.defineCMacro("MACH_DXC_C_SHARED_LIBRARY", "");
+    sharedlib.defineCMacro("MACH_DXC_C_IMPLEMENTATION", "");
 
     const shared_install_step = b.step("machdxcompiler", "Build and install the machdxcompiler shared library");
     shared_install_step.dependOn(&b.addInstallArtifact(sharedlib, .{}).step);
