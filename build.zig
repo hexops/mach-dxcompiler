@@ -190,6 +190,11 @@ pub fn build(b: *Build) !void {
                 lib.defineCMacro("LLVM_ON_UNIX", "1");
             }
 
+            if (build_shared) {
+                lib.defineCMacro("MACH_DXC_C_SHARED_LIBRARY", "");
+                lib.defineCMacro("MACH_DXC_C_IMPLEMENTATION", "");
+            }
+
             linkMachDxcDependencies(lib);
             lib.addIncludePath(b.path("src"));
 
@@ -313,11 +318,8 @@ fn buildShared(b: *Build, lib: *Build.Step.Compile, optimize: std.builtin.Optimi
 
     sharedlib.addCSourceFile(.{
         .file = b.path("src/shared_main.cpp"),
-        .flags = &.{ "-std=c++17", "-dynamic" },
-    });
-
-    sharedlib.defineCMacro("MACH_DXC_C_SHARED_LIBRARY", "");
-    sharedlib.defineCMacro("MACH_DXC_C_IMPLEMENTATION", "");
+        .flags = &.{ "-std=c++17" },
+    }); 
 
     const shared_install_step = b.step("machdxcompiler", "Build and install the machdxcompiler shared library");
     shared_install_step.dependOn(&b.addInstallArtifact(sharedlib, .{}).step);
