@@ -312,7 +312,7 @@ fn buildShared(b: *Build, lib: *Build.Step.Compile, optimize: std.builtin.Optimi
     });
 
     sharedlib.addCSourceFile(.{
-        .file = .{ .path = "src/shared_main.cpp" },
+        .file = b.path("src/shared_main.cpp"),
     });
 
     const shared_install_step = b.step("machdxcompiler", "Build and install the machdxcompiler shared library");
