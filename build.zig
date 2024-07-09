@@ -29,7 +29,6 @@ pub fn build(b: *Build) !void {
             // our DownloadBinaryStep.
             const linkage = b.addStaticLibrary(.{
                 .name = "machdxcompiler-linkage",
-                .root_source_file = b.addWriteFiles().add("empty.zig", ""),
                 .optimize = optimize,
                 .target = target,
             });
@@ -51,7 +50,6 @@ pub fn build(b: *Build) !void {
         } else {
             const lib = b.addStaticLibrary(.{
                 .name = "machdxcompiler",
-                .root_source_file = b.addWriteFiles().add("empty.zig", ""),
                 .optimize = optimize,
                 .target = target,
             });
@@ -311,7 +309,6 @@ fn buildShared(b: *Build, lib: *Build.Step.Compile, optimize: std.builtin.Optimi
 {
     const sharedlib = b.addSharedLibrary(.{
         .name = "machdxcompiler",
-        .root_source_file = b.addWriteFiles().add("empty.c", ""),
         .optimize = optimize,
         .target = target,
     });
@@ -361,7 +358,18 @@ fn addConfigHeaders(b: *Build, step: *std.Build.Step.Compile) void {
             .style = .{ .cmake = b.path("config-headers/tools/clang/include/clang/Config/config.h.cmake") },
             .include_path = "clang/Config/config.h",
         },
-        .{},
+        .{
+            .BUG_REPORT_URL = "",
+            .CLANG_DEFAULT_OPENMP_RUNTIME = "",
+            .CLANG_LIBDIR_SUFFIX = "",
+            .CLANG_RESOURCE_DIR = "",
+            .C_INCLUDE_DIRS = "",
+            .DEFAULT_SYSROOT = "",
+            .GCC_INSTALL_PREFIX = "",
+            .CLANG_HAVE_LIBXML = 0,
+            .BACKEND_PACKAGE_STRING = "",
+            .HOST_LINK_VERSION = "",
+        },
     ));
 
     // /include/llvm/Config/AsmParsers.def.in
@@ -370,7 +378,9 @@ fn addConfigHeaders(b: *Build, step: *std.Build.Step.Compile) void {
             .style = .{ .cmake = b.path("config-headers/include/llvm/Config/AsmParsers.def.in") },
             .include_path = "llvm/Config/AsmParsers.def",
         },
-        .{},
+        .{
+            .LLVM_ENUM_ASM_PARSERS = ""
+        },
     ));
 
     // /include/llvm/Config/Disassemblers.def.in
@@ -379,7 +389,9 @@ fn addConfigHeaders(b: *Build, step: *std.Build.Step.Compile) void {
             .style = .{ .cmake = b.path("config-headers/include/llvm/Config/Disassemblers.def.in") },
             .include_path = "llvm/Config/Disassemblers.def",
         },
-        .{},
+        .{
+            .LLVM_ENUM_DISASSEMBLERS = "", 
+        },
     ));
 
     // /include/llvm/Config/Targets.def.in
@@ -388,7 +400,9 @@ fn addConfigHeaders(b: *Build, step: *std.Build.Step.Compile) void {
             .style = .{ .cmake = b.path("config-headers/include/llvm/Config/Targets.def.in") },
             .include_path = "llvm/Config/Targets.def",
         },
-        .{},
+        .{
+            .LLVM_ENUM_TARGETS = "",
+        },
     ));
 
     // /include/llvm/Config/AsmPrinters.def.in
@@ -397,7 +411,9 @@ fn addConfigHeaders(b: *Build, step: *std.Build.Step.Compile) void {
             .style = .{ .cmake = b.path("config-headers/include/llvm/Config/AsmPrinters.def.in") },
             .include_path = "llvm/Config/AsmPrinters.def",
         },
-        .{},
+        .{
+            .LLVM_ENUM_ASM_PRINTERS = "",
+        },
     ));
 
     // /include/llvm/Support/DataTypes.h.cmake
@@ -410,7 +426,7 @@ fn addConfigHeaders(b: *Build, step: *std.Build.Step.Compile) void {
             .HAVE_INTTYPES_H = 1,
             .HAVE_STDINT_H = 1,
             .HAVE_UINT64_T = 1,
-            // /* #undef HAVE_U_INT64_T */
+            .HAVE_U_INT64_T = 0,
         },
     ));
 
@@ -495,8 +511,17 @@ fn addConfigHeaderLLVMConfig(b: *Build, target: std.Target, which: anytype) *std
         .LLVM_VERSION_MAJOR = 3,
         .LLVM_VERSION_MINOR = 7,
         .LLVM_VERSION_PATCH = 0,
-        .LLVM_VERSION_STRING = "3.7-v1.4.0.2274-1812-machdxcompiler",
-    };
+        .PACKAGE_VERSION = "3.7-v1.4.0.2274-1812-machdxcompiler",
+        .LLVM_BINDIR = "",
+        .LLVM_CONFIGTIME = "",
+        .LLVM_DATADIR = "",
+        .LLVM_DOCSDIR = "",
+        .LLVM_ETCDIR = "",
+        .LLVM_INCLUDEDIR = "",
+        .LLVM_INFODIR = "",
+        .LLVM_MANDIR = "",
+        .LLVM_NATIVE_ARCH = ""
+    };  
 
     const LLVMConfigH = struct {
         LLVM_HOST_TRIPLE: []const u8,
@@ -570,6 +595,7 @@ fn addConfigHeaderLLVMConfig(b: *Build, target: std.Target, which: anytype) *std
     const if_windows_or_linux: ?i64 = if (tag == .windows and !tag.isDarwin()) 1 else null;
     const if_darwin: ?i64 = if (tag.isDarwin()) 1 else null;
     const if_not_msvc: ?i64 = if (target.abi != .msvc) 1 else null;
+
     const config_h = merge(llvm_config_h, .{
         .HAVE_STRERROR = if_windows,
         .HAVE_STRERROR_R = if_not_windows,
@@ -586,10 +612,10 @@ fn addConfigHeaderLLVMConfig(b: *Build, target: std.Target, which: anytype) *std
         .HAVE_UNISTD_H = if_not_msvc,
 
         .BUG_REPORT_URL = "http://llvm.org/bugs/",
-        .ENABLE_BACKTRACES = "",
-        .ENABLE_CRASH_OVERRIDES = "",
-        .DISABLE_LLVM_DYLIB_ATEXIT = "",
-        .ENABLE_PIC = "",
+        .ENABLE_BACKTRACES = 0,
+        .ENABLE_CRASH_OVERRIDES = 0,
+        .DISABLE_LLVM_DYLIB_ATEXIT = 0,
+        .ENABLE_PIC = 0,
         .ENABLE_TIMESTAMPS = 1,
         .HAVE_CLOSEDIR = 1,
         .HAVE_CXXABI_H = 1,
@@ -637,10 +663,71 @@ fn addConfigHeaderLLVMConfig(b: *Build, target: std.Target, which: anytype) *std
         .PACKAGE_BUGREPORT = "http://llvm.org/bugs/",
         .PACKAGE_NAME = "LLVM",
         .PACKAGE_STRING = "LLVM 3.7-v1.4.0.2274-1812-g84da60c6c-dirty",
-        .PACKAGE_VERSION = "3.7-v1.4.0.2274-1812-g84da60c6c-dirty",
         .RETSIGTYPE = "void",
         .WIN32_ELMCB_PCSTR = "PCSTR",
         .HAVE__CHSIZE_S = 1,
+
+        .HAVE_DECL_ARC4RANDOM = 0,
+        .HAVE_BACKTRACE = 0,
+        .HAVE_DIA_SDK = 0,
+        .HAVE_DLERROR = 0,
+        .HAVE_EXECINFO_H = 0,
+        .HAVE_FFI_CALL = 0,
+        .HAVE_FFI_FFI_H = 0,
+        .HAVE_FFI_H = 0,
+        .HAVE_FUTIMES = 0,
+        .HAVE_FUTIMENS = 0,
+        .HAVE_GETRLIMIT = 0,
+        .HAVE_GETRUSAGE = 0,
+        .HAVE_LIBDL = 0,
+        .HAVE_LIBPTHREAD = 0,
+        .HAVE_LIBZ = 0,
+        .HAVE_LIBEDIT = 0,
+        .HAVE_LINK_H = 0,
+        .HAVE_LONGJMP = 0,
+        .HAVE_MACH_MACH_H = 0,
+        .HAVE_MACH_O_DYLD_H = 0,
+        .HAVE_MALLINFO = 0,
+        .HAVE_MALLINFO2 = 0,
+        .HAVE_MALLCTL = 0,
+        .HAVE_MKDTEMP = 0,
+        .HAVE_NDIR_H = 0,
+        .HAVE_POSIX_SPAWN = 0,
+        .HAVE_PREAD = 0,
+        .HAVE_RAND48 = 0,
+        .HAVE_REALPATH = 0,
+        .HAVE_SBRK = 0,
+        .HAVE_SETENV = 0,
+        .HAVE_SETJMP = 0,
+        .HAVE_SETRLIMIT = 0,
+        .HAVE_SIGLONGJMP = 0,
+        .HAVE_SIGSETJMP = 0,
+        .HAVE_SYS_DIR_H = 0,
+        .HAVE_STRDUP = 0,
+        .HAVE_STRTOQ = 0,
+        .HAVE_SYS_IOCTL_H = 0,
+        .HAVE_SYS_NDIR_H = 0,
+        .HAVE_SYS_RESOURCE_H = 0,
+        .HAVE_SYS_TYPES_H = 0,
+        .HAVE_SYS_UIO_H = 0,
+        .HAVE_SYS_WAIT_H = 0,
+        .HAVE_TERMINFO = 0,
+        .HAVE_TERMIOS_H = 0,
+        .HAVE_U_INT64_T = 0,
+        .HAVE_VALGRIND_VALGRIND_H = 0,
+        .HAVE_WRITEV = 0,
+        .HAVE_ZLIB_H = 0,
+        .HAVE___ALLOCA = 0,
+        .HAVE___CHKSTK = 0,
+        .HAVE___CHKSTK_MS = 0,
+        .HAVE____CHKSTK = 0,
+        .LTDL_DLOPEN_DEPLIBS = 0,
+        .LTDL_SHLIB_EXT = "",
+        .LTDL_SYSSEARCHPATH = "",
+        .strtoll = "",
+        .strtoull = "",
+        .stricmp = "",
+        .strdup = "",
     });
 
     return switch (which) {
@@ -830,7 +917,7 @@ var download_mutex = std.Thread.Mutex{};
 fn binaryZigTriple(arena: std.mem.Allocator, target: std.Target) ![]const u8 {
     // Craft a zig_triple string that we will use to create the binary download URL. Remove OS
     // version range / glibc version from triple, as we don't include that in our download URL.
-    var binary_target = std.zig.CrossTarget.fromTarget(target);
+    var binary_target = std.Target.Query.fromTarget(target);
     binary_target.os_version_min = .{ .none = undefined };
     binary_target.os_version_max = .{ .none = undefined };
     binary_target.glibc_version = null;
@@ -1001,6 +1088,9 @@ fn downloadExtractTarball(
                 },
                 .unsupported_file_type => |info| {
                     log.err("file '{s}' has unsupported type '{c}'", .{ info.file_name, @intFromEnum(info.file_type) });
+                },
+                .components_outside_stripped_prefix => |info| {
+                    log.err("file '{s}' has components outside of stripped prefix", .{ info.file_name });
                 },
             }
         }
