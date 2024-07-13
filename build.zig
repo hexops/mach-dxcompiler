@@ -917,7 +917,7 @@ var download_mutex = std.Thread.Mutex{};
 fn binaryZigTriple(arena: std.mem.Allocator, target: std.Target) ![]const u8 {
     // Craft a zig_triple string that we will use to create the binary download URL. Remove OS
     // version range / glibc version from triple, as we don't include that in our download URL.
-    var binary_target = std.Target.Query.fromTarget(target);
+    var binary_target = std.zig.CrossTarget.fromTarget(target);
     binary_target.os_version_min = .{ .none = undefined };
     binary_target.os_version_max = .{ .none = undefined };
     binary_target.glibc_version = null;
@@ -1088,9 +1088,6 @@ fn downloadExtractTarball(
                 },
                 .unsupported_file_type => |info| {
                     log.err("file '{s}' has unsupported type '{c}'", .{ info.file_name, @intFromEnum(info.file_type) });
-                },
-                .components_outside_stripped_prefix => |info| {
-                    log.err("file '{s}' has components outside of stripped prefix", .{ info.file_name });
                 },
             }
         }
