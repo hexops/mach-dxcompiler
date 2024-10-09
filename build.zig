@@ -17,6 +17,10 @@ pub fn build(b: *Build) !void {
     const target = b.standardTargetOptions(.{});
     const from_source = b.option(bool, "from_source", "Build dxcompiler from source (large C++ codebase)") orelse false;
     const debug_symbols = b.option(bool, "debug_symbols", "Whether to produce detailed debug symbols (g0) or not. These increase binary size considerably.") orelse false;
+    const build_shared = b.option(bool, "shared", "Build dxcompiler shared libraries") orelse false;
+    const build_spirv = b.option(bool, "spirv", "Build spir-v compilation support") orelse false;
+    const skip_executables = b.option(bool, "skip_executables", "Skip building executables") orelse false;
+    const skip_tests = b.option(bool, "skip_tests", "Skip building tests") orelse false;
 
     const machdxcompiler: struct { lib: *std.Build.Step.Compile, lib_path: ?[]const u8 } = blk: {
         if (!from_source) {
@@ -25,7 +29,6 @@ pub fn build(b: *Build) !void {
             // our DownloadBinaryStep.
             const linkage = b.addStaticLibrary(.{
                 .name = "machdxcompiler-linkage",
-                .root_source_file = b.addWriteFiles().add("empty.zig", ""),
                 .optimize = optimize,
                 .target = target,
             });
@@ -36,15 +39,22 @@ pub fn build(b: *Build) !void {
             linkage.addLibraryPath(.{ .cwd_relative = cache_dir });
             linkage.linkSystemLibrary("machdxcompiler");
             linkMachDxcDependenciesModule(&linkage.root_module);
+
+            // not entirely sure this will work
+            if (build_shared) {
+                buildShared(b, linkage, optimize, target);
+            }
+
             break :blk .{ .lib = linkage, .lib_path = cache_dir };
         } else {
             const lib = b.addStaticLibrary(.{
                 .name = "machdxcompiler",
-                .root_source_file = b.addWriteFiles().add("empty.zig", ""),
                 .optimize = optimize,
                 .target = target,
             });
+
             b.installArtifact(lib);
+
             // Microsoft does some shit.
             lib.root_module.sanitize_c = false;
             lib.root_module.sanitize_thread = false; // sometimes in parallel, too.
@@ -72,6 +82,7 @@ pub fn build(b: *Build) !void {
                 try cppflags.append("-g0");
             }
             try cppflags.append("-std=c++17");
+
             const base_flags = &.{
                 "-Wno-unused-command-line-argument",
                 "-Wno-unused-variable",
@@ -81,6 +92,7 @@ pub fn build(b: *Build) !void {
                 "-Wno-implicit-fallthrough",
                 "-fms-extensions", // __uuidof and friends (on non-windows targets)
             };
+
             try cflags.appendSlice(base_flags);
             try cppflags.appendSlice(base_flags);
 
@@ -138,6 +150,24 @@ pub fn build(b: *Build) !void {
                 lib_support_c_sources ++
                 lib_dxilcompression_c_sources;
 
+            // Link lazy-loaded SPIRV-Tools
+            if (build_spirv) {
+                lib.defineCMacro("ENABLE_SPIRV_CODEGEN", "");
+
+                addSPIRVIncludes(b, lib);
+
+                // Add clang SPIRV tooling sources
+                lib.addCSourceFiles(.{
+                    .files = &lib_spirv,
+                    .flags = cppflags.items,
+                });
+
+                if (b.lazyDependency("spirv-tools", .{
+                    .target = target,
+                    .optimize = optimize,
+                })) |dep| lib.linkLibrary(dep.artifact("spirv-opt"));
+            }
+
             lib.addCSourceFiles(.{
                 .files = &cpp_sources,
                 .flags = cppflags.items,
@@ -156,6 +186,11 @@ pub fn build(b: *Build) !void {
                 lib.defineCMacro("LLVM_ON_UNIX", "1");
             }
 
+            if (build_shared) {
+                lib.defineCMacro("MACH_DXC_C_SHARED_LIBRARY", "");
+                lib.defineCMacro("MACH_DXC_C_IMPLEMENTATION", "");
+            }
+
             linkMachDxcDependencies(lib);
             lib.addIncludePath(b.path("src"));
 
@@ -164,71 +199,78 @@ pub fn build(b: *Build) !void {
             // TODO: investigate how projects/dxilconv/lib/DxbcConverter/DxbcConverterImpl.h is getting pulled
             // in, we can get rid of dxbc conversion presumably
 
-            // dxc.exe builds
-            const dxc_exe = b.addExecutable(.{
-                .name = "dxc",
-                .optimize = optimize,
-                .target = target,
-            });
-            const install_dxc_step = b.step("dxc", "Build and install dxc.exe");
-            install_dxc_step.dependOn(&b.addInstallArtifact(dxc_exe, .{}).step);
-            dxc_exe.addCSourceFile(.{
-                .file = b.path(prefix ++ "/tools/clang/tools/dxc/dxcmain.cpp"),
-                .flags = &.{"-std=c++17"},
-            });
-            dxc_exe.defineCMacro("NDEBUG", ""); // disable assertions
+            if (!skip_executables) {
+                // dxc.exe builds
+                const dxc_exe = b.addExecutable(.{
+                    .name = "dxc",
+                    .optimize = optimize,
+                    .target = target,
+                });
+                const install_dxc_step = b.step("dxc", "Build and install dxc.exe");
+                install_dxc_step.dependOn(&b.addInstallArtifact(dxc_exe, .{}).step);
+                dxc_exe.addCSourceFile(.{
+                    .file = b.path(prefix ++ "/tools/clang/tools/dxc/dxcmain.cpp"),
+                    .flags = &.{"-std=c++17"},
+                });
+                dxc_exe.defineCMacro("NDEBUG", ""); // disable assertions
 
-            if (target.result.os.tag != .windows) dxc_exe.defineCMacro("HAVE_DLFCN_H", "1");
-            dxc_exe.addIncludePath(b.path(prefix ++ "/tools/clang/tools"));
-            dxc_exe.addIncludePath(b.path(prefix ++ "/include"));
-            addConfigHeaders(b, dxc_exe);
-            addIncludes(b, dxc_exe);
-            dxc_exe.addCSourceFile(.{
-                .file = b.path(prefix ++ "/tools/clang/tools/dxclib/dxc.cpp"),
-                .flags = cppflags.items,
-            });
-            b.installArtifact(dxc_exe);
-            dxc_exe.linkLibrary(lib);
+                if (target.result.os.tag != .windows) dxc_exe.defineCMacro("HAVE_DLFCN_H", "1");
+                dxc_exe.addIncludePath(b.path(prefix ++ "/tools/clang/tools"));
+                dxc_exe.addIncludePath(b.path(prefix ++ "/include"));
+                addConfigHeaders(b, dxc_exe);
+                addIncludes(b, dxc_exe);
+                dxc_exe.addCSourceFile(.{
+                    .file = b.path(prefix ++ "/tools/clang/tools/dxclib/dxc.cpp"),
+                    .flags = cppflags.items,
+                });
+                b.installArtifact(dxc_exe);
+                dxc_exe.linkLibrary(lib);
 
-            if (target.result.os.tag == .windows) {
-                // windows must be built with LTO disabled due to:
-                // https://github.com/ziglang/zig/issues/15958
-                dxc_exe.want_lto = false;
-                if (builtin.os.tag == .windows and target.result.abi == .msvc) {
-                    const msvc_lib_dir: ?[]const u8 = try @import("msvc.zig").MsvcLibDir.find(b.allocator);
+                if (target.result.os.tag == .windows) {
+                    // windows must be built with LTO disabled due to:
+                    // https://github.com/ziglang/zig/issues/15958
+                    dxc_exe.want_lto = false;
+                    if (builtin.os.tag == .windows and target.result.abi == .msvc) {
+                        const msvc_lib_dir: ?[]const u8 = try @import("msvc.zig").MsvcLibDir.find(b.allocator);
 
-                    // The MSVC lib dir looks like this:
-                    // C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.38.33130\Lib\x64
-                    // But we need the atlmfc lib dir:
-                    // C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.38.33130\atlmfc\lib\x64
-                    const msvc_dir = try std.fs.path.resolve(b.allocator, &.{ msvc_lib_dir.?, "..\\.." });
+                        // The MSVC lib dir looks like this:
+                        // C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.38.33130\Lib\x64
+                        // But we need the atlmfc lib dir:
+                        // C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.38.33130\atlmfc\lib\x64
+                        const msvc_dir = try std.fs.path.resolve(b.allocator, &.{ msvc_lib_dir.?, "..\\.." });
 
-                    const lib_dir_path = try std.mem.concat(b.allocator, u8, &.{
-                        msvc_dir,
-                        "\\atlmfc\\lib\\",
-                        if (target.result.cpu.arch == .aarch64) "arm64" else "x64",
-                    });
+                        const lib_dir_path = try std.mem.concat(b.allocator, u8, &.{
+                            msvc_dir,
+                            "\\atlmfc\\lib\\",
+                            if (target.result.cpu.arch == .aarch64) "arm64" else "x64",
+                        });
 
-                    const lib_path = try std.mem.concat(b.allocator, u8, &.{ lib_dir_path, "\\atls.lib" });
-                    const pdb_name = if (target.result.cpu.arch == .aarch64)
-                        "atls.arm64.pdb"
-                    else
-                        "atls.amd64.pdb";
-                    const pdb_path = try std.mem.concat(b.allocator, u8, &.{ lib_dir_path, "\\", pdb_name });
+                        const lib_path = try std.mem.concat(b.allocator, u8, &.{ lib_dir_path, "\\atls.lib" });
+                        const pdb_name = if (target.result.cpu.arch == .aarch64)
+                            "atls.arm64.pdb"
+                        else
+                            "atls.amd64.pdb";
+                        const pdb_path = try std.mem.concat(b.allocator, u8, &.{ lib_dir_path, "\\", pdb_name });
 
-                    // For some reason, msvc target needs atls.lib to be in the 'zig build' working directory.
-                    // Addomg tp the library path like this has no effect:
-                    dxc_exe.addLibraryPath(b.path(lib_dir_path));
-                    // So instead we must copy the lib into this directory:
-                    try std.fs.cwd().copyFile(lib_path, std.fs.cwd(), "atls.lib", .{});
-                    try std.fs.cwd().copyFile(pdb_path, std.fs.cwd(), pdb_name, .{});
-                    // This is probably a bug in the Zig linker.
+                        // For some reason, msvc target needs atls.lib to be in the 'zig build' working directory.
+                        // Addomg tp the library path like this has no effect:
+                        dxc_exe.addLibraryPath(b.path(lib_dir_path));
+                        // So instead we must copy the lib into this directory:
+                        try std.fs.cwd().copyFile(lib_path, std.fs.cwd(), "atls.lib", .{});
+                        try std.fs.cwd().copyFile(pdb_path, std.fs.cwd(), pdb_name, .{});
+                        // This is probably a bug in the Zig linker.
+                    }
                 }
             }
+
+            if (build_shared) buildShared(b, lib, optimize, target);
 
             break :blk .{ .lib = lib, .lib_path = null };
         }
     };
+
+    if (skip_executables)
+        return;
 
     // Zig bindings
     const mach_dxcompiler = b.addModule("mach-dxcompiler", .{
@@ -239,7 +281,11 @@ pub fn build(b: *Build) !void {
     mach_dxcompiler.addIncludePath(b.path("src"));
 
     mach_dxcompiler.linkLibrary(machdxcompiler.lib);
+
     if (machdxcompiler.lib_path) |p| mach_dxcompiler.addLibraryPath(.{ .cwd_relative = p });
+
+    if (skip_tests)
+        return;
 
     const main_tests = b.addTest(.{
         .name = "dxcompiler-tests",
@@ -254,6 +300,25 @@ pub fn build(b: *Build) !void {
     b.installArtifact(main_tests);
     const test_step = b.step("test", "Run library tests");
     test_step.dependOn(&b.addRunArtifact(main_tests).step);
+}
+
+fn buildShared(b: *Build, lib: *Build.Step.Compile, optimize: std.builtin.OptimizeMode, target: std.Build.ResolvedTarget) void {
+    const sharedlib = b.addSharedLibrary(.{
+        .name = "machdxcompiler",
+        .optimize = optimize,
+        .target = target,
+    });
+
+    sharedlib.addCSourceFile(.{
+        .file = b.path("src/shared_main.cpp"),
+        .flags = &.{"-std=c++17"},
+    });
+
+    const shared_install_step = b.step("machdxcompiler", "Build and install the machdxcompiler shared library");
+    shared_install_step.dependOn(&b.addInstallArtifact(sharedlib, .{}).step);
+
+    b.installArtifact(sharedlib);
+    sharedlib.linkLibrary(lib);
 }
 
 fn linkMachDxcDependencies(step: *std.Build.Step.Compile) void {
@@ -297,7 +362,7 @@ fn addConfigHeaders(b: *Build, step: *std.Build.Step.Compile) void {
             .C_INCLUDE_DIRS = null,
             .DEFAULT_SYSROOT = null,
             .GCC_INSTALL_PREFIX = null,
-            .CLANG_HAVE_LIBXML = null,
+            .CLANG_HAVE_LIBXML = 0,
             .BACKEND_PACKAGE_STRING = null,
             .HOST_LINK_VERSION = null,
         },
@@ -348,7 +413,7 @@ fn addConfigHeaders(b: *Build, step: *std.Build.Step.Compile) void {
         .{
             .HAVE_INTTYPES_H = 1,
             .HAVE_STDINT_H = 1,
-            .HAVE_U_INT64_T = null,
+            .HAVE_U_INT64_T = 0,
             .HAVE_UINT64_T = 1,
         },
     ));
@@ -405,8 +470,17 @@ fn addIncludes(b: *Build, step: *std.Build.Step.Compile) void {
     step.addIncludePath(b.path(prefix ++ "/include/llvm/Passes"));
     step.addIncludePath(b.path(prefix ++ "/include/dxc"));
     step.addIncludePath(b.path(prefix ++ "/external/DirectX-Headers/include/directx"));
+
     const target = step.rootModuleTarget();
     if (target.os.tag != .windows) step.addIncludePath(b.path(prefix ++ "/external/DirectX-Headers/include/wsl/stubs"));
+}
+
+fn addSPIRVIncludes(b: *Build, step: *std.Build.Step.Compile) void {
+    step.addIncludePath(b.path(prefix ++ "/external/SPIRV-Tools"));
+    step.addIncludePath(b.path(prefix ++ "/external/SPIRV-Tools/include"));
+    step.addIncludePath(b.path(prefix ++ "/external/SPIRV-Tools/source"));
+
+    step.addIncludePath(b.path(prefix ++ "/external/SPIRV-Headers/include"));
 }
 
 // /include/llvm/Config/llvm-config.h.cmake
@@ -739,6 +813,31 @@ fn addConfigHeaderLLVMConfig(b: *Build, target: std.Target, which: anytype) *std
     };
 }
 
+fn ensureCommandExists(allocator: std.mem.Allocator, name: []const u8, exist_check: []const u8) bool {
+    const result = std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &[_][]const u8{ name, exist_check },
+        .cwd = ".",
+    }) catch // e.g. FileNotFound
+        {
+        return false;
+    };
+
+    defer {
+        allocator.free(result.stderr);
+        allocator.free(result.stdout);
+    }
+
+    if (result.term.Exited != 0)
+        return false;
+
+    return true;
+}
+
+// ------------------------------------------
+// Source cloning logic
+// ------------------------------------------
+
 fn ensureGitRepoCloned(allocator: std.mem.Allocator, clone_url: []const u8, revision: []const u8, dir: []const u8) !void {
     if (isEnvVarTruthy(allocator, "NO_ENSURE_SUBMODULES") or isEnvVarTruthy(allocator, "NO_ENSURE_GIT")) {
         return;
@@ -775,21 +874,9 @@ fn getCurrentGitRevision(allocator: std.mem.Allocator, cwd: []const u8) ![]const
     return result.stdout;
 }
 
+// Command validation logic moved to ensureCommandExists()
 fn ensureGit(allocator: std.mem.Allocator) void {
-    const argv = &[_][]const u8{ "git", "--version" };
-    const result = std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = argv,
-        .cwd = ".",
-    }) catch { // e.g. FileNotFound
-        log.err("'git --version' failed. Is git not installed?", .{});
-        std.process.exit(1);
-    };
-    defer {
-        allocator.free(result.stderr);
-        allocator.free(result.stdout);
-    }
-    if (result.term.Exited != 0) {
+    if (!ensureCommandExists(allocator, "git", "--version")) {
         log.err("'git --version' failed. Is git not installed?", .{});
         std.process.exit(1);
     }
@@ -2151,4 +2238,40 @@ const lib_dxilrootsignature_sources = [_][]const u8{
     "libs/DirectXShaderCompiler/lib/DxilRootSignature/DxilRootSignatureSerializer.cpp",
     "libs/DirectXShaderCompiler/lib/DxilRootSignature/DxilRootSignatureConvert.cpp",
     "libs/DirectXShaderCompiler/lib/DxilRootSignature/DxilRootSignatureValidator.cpp",
+};
+
+// SPIRV-Tools stuff
+// find libs/DirectXShaderCompiler/external/SPIRV-Tools/source | grep '\.cpp$' | xargs -I {} -n1 echo '"{}",' | pbcopy
+
+const lib_spirv = [_][]const u8{
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/RemoveBufferBlockVisitor.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/LiteralTypeVisitor.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/AlignmentSizeCalculator.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/RawBufferMethods.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/GlPerVertex.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/SpirvFunction.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/LowerTypeVisitor.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/SpirvInstruction.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/DeclResultIdMapper.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/SpirvEmitter.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/SpirvBuilder.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/FeatureManager.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/SpirvModule.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/BlockReadableOrder.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/SignaturePackingUtil.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/CapabilityVisitor.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/SpirvBasicBlock.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/NonUniformVisitor.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/RelaxedPrecisionVisitor.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/SpirvType.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/SortDebugInfoVisitor.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/SpirvContext.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/PreciseVisitor.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/EmitSpirvAction.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/PervertexInputVisitor.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/EmitVisitor.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/String.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/AstTypeProbe.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/DebugTypeVisitor.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/InitListHandler.cpp",
 };

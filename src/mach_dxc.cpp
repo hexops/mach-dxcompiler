@@ -18,12 +18,87 @@
 #include <dxcapi.h>
 #include <cassert>
 #include <stddef.h>
+#include <string>
 
 #include "mach_dxc.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+// Dynamic allocation for multibyte string conversion.
+char* wcstombsAlloc(const wchar_t* inval) 
+{
+    size_t size = std::wcslen(inval);
+    size_t outsz = (size + 1) * MB_CUR_MAX;
+   
+    auto buf = (char*)std::malloc(outsz);
+    std::memset(buf, 0, outsz);
+    std::setlocale(LC_CTYPE,""); 
+    size = std::wcstombs(buf, inval, size * sizeof(wchar_t));
+
+    if (size == (size_t)(-1)) {
+        std::free(buf);
+        buf = nullptr;
+    } else {
+        buf = (char*)std::realloc(buf, size + 1);
+    }
+
+    return buf;
+}
+
+// Provides a way for C applications to override file inclusion by offloading it to a function pointer
+class MachDxcIncludeHandler : public IDxcIncludeHandler 
+{
+public:
+    ULONG STDMETHODCALLTYPE AddRef() override { return 0; }
+    ULONG STDMETHODCALLTYPE Release() override { return 0; }
+
+    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void **ppvObject) override {
+        if (riid == __uuidof(IDxcIncludeHandler) || riid == __uuidof(IUnknown)) {
+            *ppvObject = this;
+            return S_OK;
+        }
+        *ppvObject = nullptr;
+        return E_NOINTERFACE;
+    }
+
+    MachDxcIncludeCallbacks* callbacks;
+    IDxcUtils* utils;
+
+    MachDxcIncludeHandler(MachDxcIncludeCallbacks* callbacks_ptr, IDxcUtils* util_ptr) { 
+        callbacks = callbacks_ptr;
+        utils = util_ptr;
+    }
+
+    HRESULT STDMETHODCALLTYPE LoadSource(LPCWSTR filename, IDxcBlob **ppIncludeSource) override {
+        if (callbacks->include_func == nullptr || callbacks->free_func == nullptr)
+            return E_POINTER;
+        
+        char* filename_utf8 = wcstombsAlloc(filename);
+
+        if (filename_utf8 == nullptr)
+            filename_utf8 = strdup(u8"");
+
+        MachDxcIncludeResult* include_result = callbacks->include_func(callbacks->include_ctx, filename_utf8);
+
+        std::free(filename_utf8);
+
+        const char* include_text = include_result != nullptr && include_result->header_data != nullptr ? include_result->header_data : u8"";
+        size_t include_len = include_result != nullptr ? include_result->header_length : 0;
+
+        CComPtr<IDxcBlobEncoding> text_blob;
+        HRESULT result = utils->CreateBlob(include_text, include_len, CP_UTF8, &text_blob);
+
+        if (SUCCEEDED(result)) 
+            *ppIncludeSource = text_blob.Detach();
+            
+        callbacks->free_func(callbacks->include_ctx, include_result);
+
+        return S_OK;
+    }
+};  
+
 
 // Mach change start: static dxcompiler/dxil
 BOOL MachDxcompilerInvokeDllMain();
@@ -46,22 +121,20 @@ MACH_EXPORT void machDxcDeinit(MachDxcCompiler compiler) {
     MachDxcompilerInvokeDllShutdown();
 }
 
+
 //---------------------
 // MachDxcCompileResult
 //---------------------
 MACH_EXPORT MachDxcCompileResult machDxcCompile(
     MachDxcCompiler compiler,
-    char const* code,
-    size_t code_len,
-    char const* const* args,
-    size_t args_len
+    MachDxcCompileOptions* options
 ) {
     CComPtr<IDxcCompiler3> dxcInstance = CComPtr(reinterpret_cast<IDxcCompiler3*>(compiler));
 
     CComPtr<IDxcUtils> pUtils;
     DxcCreateInstance(CLSID_DxcUtils, IID_PPV_ARGS(&pUtils));
     CComPtr<IDxcBlobEncoding> pSource;
-    pUtils->CreateBlob(code, code_len, CP_UTF8, &pSource);
+    pUtils->CreateBlob(options->code, options->code_len, CP_UTF8, &pSource);
 
     DxcBuffer sourceBuffer;
     sourceBuffer.Ptr = pSource->GetBufferPointer();
@@ -69,30 +142,39 @@ MACH_EXPORT MachDxcCompileResult machDxcCompile(
     sourceBuffer.Encoding = 0;
 
     // We have args in char form, but dxcInstance->Compile expects wchar_t form.
-    LPCWSTR* arguments = (LPCWSTR*)malloc(sizeof(LPCWSTR) * args_len);
+    LPCWSTR* arguments = (LPCWSTR*)malloc(sizeof(LPCWSTR) * options->args_len);
     wchar_t* wtext_buf = (wchar_t*)malloc(4096);
     wchar_t* wtext_cursor = wtext_buf;
     assert(arguments);
     assert(wtext_buf);
 
-    for (int i=0; i < args_len; i++) {
+    for (int i=0; i < options->args_len; i++) {
         size_t available = 4096 / sizeof(wchar_t) - (wtext_cursor - wtext_buf);
-        size_t written = std::mbstowcs(wtext_cursor, args[i], available);
+        size_t written = std::mbstowcs(wtext_cursor, options->args[i], available);
         arguments[i] = wtext_cursor;
         wtext_cursor += written + 1;
     }
+
+    MachDxcIncludeHandler* handler = nullptr;
+    if (options->include_callbacks != nullptr) // Leave include handler as default (nullptr) unless there's available callbacks
+        handler = new MachDxcIncludeHandler(options->include_callbacks, pUtils);
 
     CComPtr<IDxcResult> pCompileResult;
     HRESULT hr = dxcInstance->Compile(
         &sourceBuffer,
         arguments,
-        (uint32_t)args_len,
-        nullptr,
+        (uint32_t)options->args_len,
+        handler,
         IID_PPV_ARGS(&pCompileResult)
     );
+
+    if (handler != nullptr)
+        delete handler;
+
     assert(SUCCEEDED(hr));
     free(arguments);
     free(wtext_buf);
+
     return reinterpret_cast<MachDxcCompileResult>(pCompileResult.Detach());
 }
 
