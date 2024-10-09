@@ -290,16 +290,16 @@ fn addConfigHeaders(b: *Build, step: *std.Build.Step.Compile) void {
             .include_path = "clang/Config/config.h",
         },
         .{
-            .BUG_REPORT_URL = "",
-            .CLANG_DEFAULT_OPENMP_RUNTIME = "",
-            .CLANG_LIBDIR_SUFFIX = "",
-            .CLANG_RESOURCE_DIR = "",
-            .C_INCLUDE_DIRS = "",
-            .DEFAULT_SYSROOT = "",
-            .GCC_INSTALL_PREFIX = "",
-            .CLANG_HAVE_LIBXML = 0,
-            .BACKEND_PACKAGE_STRING = "",
-            .HOST_LINK_VERSION = "",
+            .BUG_REPORT_URL = null,
+            .CLANG_DEFAULT_OPENMP_RUNTIME = null,
+            .CLANG_LIBDIR_SUFFIX = null,
+            .CLANG_RESOURCE_DIR = null,
+            .C_INCLUDE_DIRS = null,
+            .DEFAULT_SYSROOT = null,
+            .GCC_INSTALL_PREFIX = null,
+            .CLANG_HAVE_LIBXML = null,
+            .BACKEND_PACKAGE_STRING = null,
+            .HOST_LINK_VERSION = null,
         },
     ));
 
@@ -309,7 +309,7 @@ fn addConfigHeaders(b: *Build, step: *std.Build.Step.Compile) void {
             .style = .{ .cmake = b.path("config-headers/include/llvm/Config/AsmParsers.def.in") },
             .include_path = "llvm/Config/AsmParsers.def",
         },
-        .{ .LLVM_ENUM_ASM_PARSERS = "" },
+        .{ .LLVM_ENUM_ASM_PARSERS = null },
     ));
 
     // /include/llvm/Config/Disassemblers.def.in
@@ -318,7 +318,7 @@ fn addConfigHeaders(b: *Build, step: *std.Build.Step.Compile) void {
             .style = .{ .cmake = b.path("config-headers/include/llvm/Config/Disassemblers.def.in") },
             .include_path = "llvm/Config/Disassemblers.def",
         },
-        .{ .LLVM_ENUM_DISASSEMBLERS = "" },
+        .{ .LLVM_ENUM_DISASSEMBLERS = null },
     ));
 
     // /include/llvm/Config/Targets.def.in
@@ -327,7 +327,7 @@ fn addConfigHeaders(b: *Build, step: *std.Build.Step.Compile) void {
             .style = .{ .cmake = b.path("config-headers/include/llvm/Config/Targets.def.in") },
             .include_path = "llvm/Config/Targets.def",
         },
-        .{ .LLVM_ENUM_TARGETS = "" },
+        .{ .LLVM_ENUM_TARGETS = null },
     ));
 
     // /include/llvm/Config/AsmPrinters.def.in
@@ -336,7 +336,7 @@ fn addConfigHeaders(b: *Build, step: *std.Build.Step.Compile) void {
             .style = .{ .cmake = b.path("config-headers/include/llvm/Config/AsmPrinters.def.in") },
             .include_path = "llvm/Config/AsmPrinters.def",
         },
-        .{ .LLVM_ENUM_ASM_PRINTERS = "" },
+        .{ .LLVM_ENUM_ASM_PRINTERS = null },
     ));
 
     // /include/llvm/Support/DataTypes.h.cmake
