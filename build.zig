@@ -348,7 +348,7 @@ fn addConfigHeaders(b: *Build, step: *std.Build.Step.Compile) void {
         .{
             .HAVE_INTTYPES_H = 1,
             .HAVE_STDINT_H = 1,
-            .HAVE_U_INT64_T = 0,
+            .HAVE_U_INT64_T = null,
             .HAVE_UINT64_T = 1,
         },
     ));
