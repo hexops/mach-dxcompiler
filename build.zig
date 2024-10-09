@@ -289,7 +289,18 @@ fn addConfigHeaders(b: *Build, step: *std.Build.Step.Compile) void {
             .style = .{ .cmake = b.path("config-headers/tools/clang/include/clang/Config/config.h.cmake") },
             .include_path = "clang/Config/config.h",
         },
-        .{},
+        .{
+            .BUG_REPORT_URL = "",
+            .CLANG_DEFAULT_OPENMP_RUNTIME = "",
+            .CLANG_LIBDIR_SUFFIX = "",
+            .CLANG_RESOURCE_DIR = "",
+            .C_INCLUDE_DIRS = "",
+            .DEFAULT_SYSROOT = "",
+            .GCC_INSTALL_PREFIX = "",
+            .CLANG_HAVE_LIBXML = 0,
+            .BACKEND_PACKAGE_STRING = "",
+            .HOST_LINK_VERSION = "",
+        },
     ));
 
     // /include/llvm/Config/AsmParsers.def.in
@@ -298,7 +309,7 @@ fn addConfigHeaders(b: *Build, step: *std.Build.Step.Compile) void {
             .style = .{ .cmake = b.path("config-headers/include/llvm/Config/AsmParsers.def.in") },
             .include_path = "llvm/Config/AsmParsers.def",
         },
-        .{},
+        .{ .LLVM_ENUM_ASM_PARSERS = "" },
     ));
 
     // /include/llvm/Config/Disassemblers.def.in
@@ -307,7 +318,7 @@ fn addConfigHeaders(b: *Build, step: *std.Build.Step.Compile) void {
             .style = .{ .cmake = b.path("config-headers/include/llvm/Config/Disassemblers.def.in") },
             .include_path = "llvm/Config/Disassemblers.def",
         },
-        .{},
+        .{ .LLVM_ENUM_DISASSEMBLERS = "" },
     ));
 
     // /include/llvm/Config/Targets.def.in
@@ -316,7 +327,7 @@ fn addConfigHeaders(b: *Build, step: *std.Build.Step.Compile) void {
             .style = .{ .cmake = b.path("config-headers/include/llvm/Config/Targets.def.in") },
             .include_path = "llvm/Config/Targets.def",
         },
-        .{},
+        .{ .LLVM_ENUM_TARGETS = "" },
     ));
 
     // /include/llvm/Config/AsmPrinters.def.in
@@ -325,7 +336,7 @@ fn addConfigHeaders(b: *Build, step: *std.Build.Step.Compile) void {
             .style = .{ .cmake = b.path("config-headers/include/llvm/Config/AsmPrinters.def.in") },
             .include_path = "llvm/Config/AsmPrinters.def",
         },
-        .{},
+        .{ .LLVM_ENUM_ASM_PRINTERS = "" },
     ));
 
     // /include/llvm/Support/DataTypes.h.cmake
@@ -337,8 +348,8 @@ fn addConfigHeaders(b: *Build, step: *std.Build.Step.Compile) void {
         .{
             .HAVE_INTTYPES_H = 1,
             .HAVE_STDINT_H = 1,
+            .HAVE_U_INT64_T = 0,
             .HAVE_UINT64_T = 1,
-            // /* #undef HAVE_U_INT64_T */
         },
     ));
 
@@ -403,81 +414,234 @@ fn addIncludes(b: *Build, step: *std.Build.Step.Compile) void {
 fn addConfigHeaderLLVMConfig(b: *Build, target: std.Target, which: anytype) *std.Build.Step.ConfigHeader {
     // Note: LLVM_HOST_TRIPLEs can be found by running $ llc --version | grep Default
     // Note: arm64 is an alias for aarch64, we always use aarch64 over arm64.
-    const cross_platform = .{
+
+    const LLVMConfigH = struct {
+        LLVM_BINDIR: ?[]const u8 = null,
+        LLVM_CONFIGTIME: ?[]const u8 = null,
+        LLVM_DATADIR: ?[]const u8 = null,
+        LLVM_DEFAULT_TARGET_TRIPLE: []const u8,
+        LLVM_DOCSDIR: ?[]const u8 = null,
+        LLVM_ENABLE_THREADS: ?i64 = null,
+        LLVM_ETCDIR: ?[]const u8 = null,
+        LLVM_HAS_ATOMICS: ?i64 = null,
+        LLVM_HOST_TRIPLE: []const u8 = "",
+        LLVM_INCLUDEDIR: ?[]const u8 = null,
+        LLVM_INFODIR: ?[]const u8 = null,
+        LLVM_MANDIR: ?[]const u8 = null,
+        LLVM_NATIVE_ARCH: []const u8 = "",
+        LLVM_ON_UNIX: ?i64 = null,
+        LLVM_ON_WIN32: ?i64 = null,
+        LLVM_PREFIX: []const u8,
+        LLVM_VERSION_MAJOR: u8,
+        LLVM_VERSION_MINOR: u8,
+        LLVM_VERSION_PATCH: u8,
+        PACKAGE_VERSION: []const u8,
+    };
+
+    var llvm_config_h: LLVMConfigH = .{
         .LLVM_PREFIX = "/usr/local",
         .LLVM_DEFAULT_TARGET_TRIPLE = "dxil-ms-dx",
         .LLVM_ENABLE_THREADS = 1,
         .LLVM_HAS_ATOMICS = 1,
+        .LLVM_HOST_TRIPLE = "",
         .LLVM_VERSION_MAJOR = 3,
         .LLVM_VERSION_MINOR = 7,
         .LLVM_VERSION_PATCH = 0,
-        .LLVM_VERSION_STRING = "3.7-v1.4.0.2274-1812-machdxcompiler",
+        .PACKAGE_VERSION = "3.7-v1.4.0.2274-1812-g84da60c6c-dirty",
     };
 
-    const LLVMConfigH = struct {
-        LLVM_HOST_TRIPLE: []const u8,
-        LLVM_ON_WIN32: ?i64 = null,
-        LLVM_ON_UNIX: ?i64 = null,
-        HAVE_SYS_MMAN_H: ?i64 = null,
-    };
-    const llvm_config_h = blk: {
-        if (target.os.tag == .windows) {
-            break :blk switch (target.abi) {
-                .msvc => switch (target.cpu.arch) {
-                    .x86_64 => merge(cross_platform, LLVMConfigH{
-                        .LLVM_HOST_TRIPLE = "x86_64-w64-msvc",
-                        .LLVM_ON_WIN32 = 1,
-                    }),
-                    .aarch64 => merge(cross_platform, LLVMConfigH{
-                        .LLVM_HOST_TRIPLE = "aarch64-w64-msvc",
-                        .LLVM_ON_WIN32 = 1,
-                    }),
-                    else => @panic("target architecture not supported"),
-                },
-                .gnu => switch (target.cpu.arch) {
-                    .x86_64 => merge(cross_platform, LLVMConfigH{
-                        .LLVM_HOST_TRIPLE = "x86_64-w64-mingw32",
-                        .LLVM_ON_WIN32 = 1,
-                    }),
-                    .aarch64 => merge(cross_platform, LLVMConfigH{
-                        .LLVM_HOST_TRIPLE = "aarch64-w64-mingw32",
-                        .LLVM_ON_WIN32 = 1,
-                    }),
-                    else => @panic("target architecture not supported"),
-                },
-                else => @panic("target ABI not supported"),
-            };
-        } else if (target.os.tag.isDarwin()) {
-            break :blk switch (target.cpu.arch) {
-                .aarch64 => merge(cross_platform, LLVMConfigH{
-                    .LLVM_HOST_TRIPLE = "aarch64-apple-darwin",
-                    .LLVM_ON_UNIX = 1,
-                    .HAVE_SYS_MMAN_H = 1,
-                }),
-                .x86_64 => merge(cross_platform, LLVMConfigH{
-                    .LLVM_HOST_TRIPLE = "x86_64-apple-darwin",
-                    .LLVM_ON_UNIX = 1,
-                    .HAVE_SYS_MMAN_H = 1,
-                }),
+    if (target.os.tag == .windows) {
+        llvm_config_h.LLVM_ON_WIN32 = 1;
+        switch (target.abi) {
+            .msvc => switch (target.cpu.arch) {
+                .x86_64 => llvm_config_h.LLVM_HOST_TRIPLE = "x86_64-w64-msvc",
+                .aarch64 => llvm_config_h.LLVM_HOST_TRIPLE = "aarch64-w64-msvc",
                 else => @panic("target architecture not supported"),
-            };
-        } else {
-            // Assume linux-like
-            // TODO: musl support?
-            break :blk switch (target.cpu.arch) {
-                .aarch64 => merge(cross_platform, LLVMConfigH{
-                    .LLVM_HOST_TRIPLE = "aarch64-linux-gnu",
-                    .LLVM_ON_UNIX = 1,
-                    .HAVE_SYS_MMAN_H = 1,
-                }),
-                .x86_64 => merge(cross_platform, LLVMConfigH{
-                    .LLVM_HOST_TRIPLE = "x86_64-linux-gnu",
-                    .LLVM_ON_UNIX = 1,
-                    .HAVE_SYS_MMAN_H = 1,
-                }),
+            },
+            .gnu => switch (target.cpu.arch) {
+                .x86_64 => llvm_config_h.LLVM_HOST_TRIPLE = "x86_64-w64-mingw32",
+                .aarch64 => llvm_config_h.LLVM_HOST_TRIPLE = "aarch64-w64-mingw32",
                 else => @panic("target architecture not supported"),
-            };
+            },
+            else => @panic("target ABI not supported"),
         }
+    } else if (target.os.tag.isDarwin()) {
+        llvm_config_h.LLVM_ON_UNIX = 1;
+        switch (target.cpu.arch) {
+            .aarch64 => llvm_config_h.LLVM_HOST_TRIPLE = "aarch64-apple-darwin",
+            .x86_64 => llvm_config_h.LLVM_HOST_TRIPLE = "x86_64-apple-darwin",
+            else => @panic("target architecture not supported"),
+        }
+    } else {
+        // Assume linux-like
+        // TODO: musl support?
+        llvm_config_h.LLVM_ON_UNIX = 1;
+        switch (target.cpu.arch) {
+            .aarch64 => llvm_config_h.LLVM_HOST_TRIPLE = "aarch64-linux-gnu",
+            .x86_64 => llvm_config_h.LLVM_HOST_TRIPLE = "x86_64-linux-gnu",
+            else => @panic("target architecture not supported"),
+        }
+    }
+
+    const CONFIG_H = struct {
+        BUG_REPORT_URL: []const u8 = "http://llvm.org/bugs/",
+        ENABLE_BACKTRACES: []const u8 = "",
+        ENABLE_CRASH_OVERRIDES: []const u8 = "",
+        DISABLE_LLVM_DYLIB_ATEXIT: []const u8 = "",
+        ENABLE_PIC: []const u8 = "",
+        ENABLE_TIMESTAMPS: ?i64 = null,
+        HAVE_DECL_ARC4RANDOM: ?i64 = null,
+        HAVE_BACKTRACE: ?i64 = null,
+        HAVE_CLOSEDIR: ?i64 = null,
+        HAVE_CXXABI_H: ?i64 = null,
+        HAVE_DECL_STRERROR_S: ?i64 = null,
+        HAVE_DIRENT_H: ?i64 = null,
+        HAVE_DIA_SDK: ?i64 = null,
+        HAVE_DLERROR: ?i64 = null,
+        HAVE_DLFCN_H: ?i64 = null,
+        HAVE_DLOPEN: ?i64 = null,
+        HAVE_ERRNO_H: ?i64 = null,
+        HAVE_EXECINFO_H: ?i64 = null,
+        HAVE_FCNTL_H: ?i64 = null,
+        HAVE_FENV_H: ?i64 = null,
+        HAVE_FFI_CALL: ?i64 = null,
+        HAVE_FFI_FFI_H: ?i64 = null,
+        HAVE_FFI_H: ?i64 = null,
+        HAVE_FUTIMENS: ?i64 = null,
+        HAVE_FUTIMES: ?i64 = null,
+        HAVE_GETCWD: ?i64 = null,
+        HAVE_GETPAGESIZE: ?i64 = null,
+        HAVE_GETRLIMIT: ?i64 = null,
+        HAVE_GETRUSAGE: ?i64 = null,
+        HAVE_GETTIMEOFDAY: ?i64 = null,
+        HAVE_INT64_T: ?i64 = null,
+        HAVE_INTTYPES_H: ?i64 = null,
+        HAVE_ISATTY: ?i64 = null,
+        HAVE_LIBDL: ?i64 = null,
+        HAVE_LIBEDIT: ?i64 = null,
+        HAVE_LIBPSAPI: ?i64 = null,
+        HAVE_LIBPTHREAD: ?i64 = null,
+        HAVE_LIBSHELL32: ?i64 = null,
+        HAVE_LIBZ: ?i64 = null,
+        HAVE_LIMITS_H: ?i64 = null,
+        HAVE_LINK_EXPORT_DYNAMIC: ?i64 = null,
+        HAVE_LINK_H: ?i64 = null,
+        HAVE_LONGJMP: ?i64 = null,
+        HAVE_MACH_MACH_H: ?i64 = null,
+        HAVE_MACH_O_DYLD_H: ?i64 = null,
+        HAVE_MALLCTL: ?i64 = null,
+        HAVE_MALLINFO: ?i64 = null,
+        HAVE_MALLINFO2: ?i64 = null,
+        HAVE_MALLOC_H: ?i64 = null,
+        HAVE_MALLOC_MALLOC_H: ?i64 = null,
+        HAVE_MALLOC_ZONE_STATISTICS: ?i64 = null,
+        HAVE_MKDTEMP: ?i64 = null,
+        HAVE_MKSTEMP: ?i64 = null,
+        HAVE_MKTEMP: ?i64 = null,
+        HAVE_NDIR_H: ?i64 = null,
+        HAVE_OPENDIR: ?i64 = null,
+        HAVE_POSIX_SPAWN: ?i64 = null,
+        HAVE_PREAD: ?i64 = null,
+        HAVE_PTHREAD_GETSPECIFIC: ?i64 = null,
+        HAVE_PTHREAD_H: ?i64 = null,
+        HAVE_PTHREAD_MUTEX_LOCK: ?i64 = null,
+        HAVE_PTHREAD_RWLOCK_INIT: ?i64 = null,
+        HAVE_RAND48: ?i64 = null,
+        HAVE_READDIR: ?i64 = null,
+        HAVE_REALPATH: ?i64 = null,
+        HAVE_SBRK: ?i64 = null,
+        HAVE_SETENV: ?i64 = null,
+        HAVE_SETJMP: ?i64 = null,
+        HAVE_SETRLIMIT: ?i64 = null,
+        HAVE_SIGLONGJMP: ?i64 = null,
+        HAVE_SIGNAL_H: ?i64 = null,
+        HAVE_SIGSETJMP: ?i64 = null,
+        HAVE_STDINT_H: ?i64 = null,
+        HAVE_STRDUP: ?i64 = null,
+        HAVE_STRERROR_R: ?i64 = null,
+        HAVE_STRERROR: ?i64 = null,
+        HAVE_STRTOLL: ?i64 = null,
+        HAVE_STRTOQ: ?i64 = null,
+        HAVE_SYS_DIR_H: ?i64 = null,
+        HAVE_SYS_IOCTL_H: ?i64 = null,
+        HAVE_SYS_MMAN_H: ?i64 = null,
+        HAVE_SYS_NDIR_H: ?i64 = null,
+        HAVE_SYS_PARAM_H: ?i64 = null,
+        HAVE_SYS_RESOURCE_H: ?i64 = null,
+        HAVE_SYS_STAT_H: ?i64 = null,
+        HAVE_SYS_TIME_H: ?i64 = null,
+        HAVE_SYS_TYPES_H: ?i64 = null,
+        HAVE_SYS_UIO_H: ?i64 = null,
+        HAVE_SYS_WAIT_H: ?i64 = null,
+        HAVE_TERMINFO: ?i64 = null,
+        HAVE_TERMIOS_H: ?i64 = null,
+        HAVE_UINT64_T: ?i64 = null,
+        HAVE_UNISTD_H: ?i64 = null,
+        HAVE_UTIME_H: ?i64 = null,
+        HAVE_U_INT64_T: ?i64 = null,
+        HAVE_VALGRIND_VALGRIND_H: ?i64 = null,
+        HAVE_WRITEV: ?i64 = null,
+        HAVE_ZLIB_H: ?i64 = null,
+        HAVE__ALLOCA: ?i64 = null,
+        HAVE___ALLOCA: ?i64 = null,
+        HAVE___ASHLDI3: ?i64 = null,
+        HAVE___ASHRDI3: ?i64 = null,
+        HAVE___CHKSTK: ?i64 = null,
+        HAVE___CHKSTK_MS: ?i64 = null,
+        HAVE___CMPDI2: ?i64 = null,
+        HAVE___DIVDI3: ?i64 = null,
+        HAVE___FIXDFDI: ?i64 = null,
+        HAVE___FIXSFDI: ?i64 = null,
+        HAVE___FLOATDIDF: ?i64 = null,
+        HAVE___LSHRDI3: ?i64 = null,
+        HAVE___MAIN: ?i64 = null,
+        HAVE___MODDI3: ?i64 = null,
+        HAVE___UDIVDI3: ?i64 = null,
+        HAVE___UMODDI3: ?i64 = null,
+        HAVE____CHKSTK: ?i64 = null,
+        HAVE____CHKSTK_MS: ?i64 = null,
+        LLVM_BINDIR: ?[]const u8 = null,
+        LLVM_CONFIGTIME: ?[]const u8 = null,
+        LLVM_DATADIR: ?[]const u8 = null,
+        LLVM_DEFAULT_TARGET_TRIPLE: []const u8,
+        LLVM_DOCSDIR: ?[]const u8 = null,
+        LLVM_ENABLE_THREADS: ?i64 = null,
+        LLVM_ENABLE_ZLIB: ?i64 = null,
+        LLVM_ETCDIR: ?[]const u8 = null,
+        LLVM_HAS_ATOMICS: ?i64 = null,
+        LLVM_HOST_TRIPLE: []const u8 = "",
+        LLVM_INCLUDEDIR: ?[]const u8 = null,
+        LLVM_INFODIR: ?[]const u8 = null,
+        LLVM_MANDIR: ?[]const u8 = null,
+        LLVM_NATIVE_ARCH: []const u8 = "",
+        LLVM_ON_UNIX: ?i64 = null,
+        LLVM_ON_WIN32: ?i64 = null,
+        LLVM_PREFIX: []const u8,
+        LLVM_VERSION_MAJOR: u8,
+        LLVM_VERSION_MINOR: u8,
+        LLVM_VERSION_PATCH: u8,
+
+        // LTDL_... isn't an i64, but we don't use them and I am unsure
+        // what type is more appropriate.
+        LTDL_DLOPEN_DEPLIBS: ?i64 = null,
+        LTDL_SHLIB_EXT: ?i64 = null,
+        LTDL_SYSSEARCHPATH: ?i64 = null,
+
+        PACKAGE_BUGREPORT: []const u8 = "http://llvm.org/bugs/",
+        PACKAGE_NAME: []const u8 = "LLVM",
+        PACKAGE_STRING: []const u8 = "LLVM 3.7-v1.4.0.2274-1812-g84da60c6c-dirty",
+        PACKAGE_VERSION: []const u8,
+        RETSIGTYPE: []const u8 = "void",
+        WIN32_ELMCB_PCSTR: []const u8 = "PCSTR",
+
+        // str... isn't an i64, but we don't use them and I am unsure
+        // what type is more appropriate. Perhaps a function pointer?
+        strtoll: ?i64 = null,
+        strtoull: ?i64 = null,
+        stricmp: ?i64 = null,
+        strdup: ?i64 = null,
+
+        HAVE__CHSIZE_S: ?i64 = null,
     };
 
     const tag = target.os.tag;
@@ -486,7 +650,7 @@ fn addConfigHeaderLLVMConfig(b: *Build, target: std.Target, which: anytype) *std
     const if_windows_or_linux: ?i64 = if (tag == .windows and !tag.isDarwin()) 1 else null;
     const if_darwin: ?i64 = if (tag.isDarwin()) 1 else null;
     const if_not_msvc: ?i64 = if (target.abi != .msvc) 1 else null;
-    const config_h = merge(llvm_config_h, .{
+    const config_h = CONFIG_H{
         .HAVE_STRERROR = if_windows,
         .HAVE_STRERROR_R = if_not_windows,
         .HAVE_MALLOC_H = if_windows_or_linux,
@@ -500,12 +664,8 @@ fn addConfigHeaderLLVMConfig(b: *Build, target: std.Target, which: anytype) *std
         .HAVE_DLOPEN = if_not_windows,
         .HAVE_DLFCN_H = if_not_windows, //
         .HAVE_UNISTD_H = if_not_msvc,
+        .HAVE_SYS_MMAN_H = if_not_windows,
 
-        .BUG_REPORT_URL = "http://llvm.org/bugs/",
-        .ENABLE_BACKTRACES = "",
-        .ENABLE_CRASH_OVERRIDES = "",
-        .DISABLE_LLVM_DYLIB_ATEXIT = "",
-        .ENABLE_PIC = "",
         .ENABLE_TIMESTAMPS = 1,
         .HAVE_CLOSEDIR = 1,
         .HAVE_CXXABI_H = 1,
@@ -549,15 +709,22 @@ fn addConfigHeaderLLVMConfig(b: *Build, target: std.Target, which: anytype) *std
         .HAVE___UDIVDI3 = 1,
         .HAVE___UMODDI3 = 1,
         .HAVE____CHKSTK_MS = 1,
+
+        .LLVM_DEFAULT_TARGET_TRIPLE = llvm_config_h.LLVM_DEFAULT_TARGET_TRIPLE,
+        .LLVM_ENABLE_THREADS = llvm_config_h.LLVM_ENABLE_THREADS,
         .LLVM_ENABLE_ZLIB = 0,
-        .PACKAGE_BUGREPORT = "http://llvm.org/bugs/",
-        .PACKAGE_NAME = "LLVM",
-        .PACKAGE_STRING = "LLVM 3.7-v1.4.0.2274-1812-g84da60c6c-dirty",
-        .PACKAGE_VERSION = "3.7-v1.4.0.2274-1812-g84da60c6c-dirty",
-        .RETSIGTYPE = "void",
-        .WIN32_ELMCB_PCSTR = "PCSTR",
+        .LLVM_HAS_ATOMICS = llvm_config_h.LLVM_HAS_ATOMICS,
+        .LLVM_HOST_TRIPLE = llvm_config_h.LLVM_HOST_TRIPLE,
+        .LLVM_ON_UNIX = llvm_config_h.LLVM_ON_UNIX,
+        .LLVM_ON_WIN32 = llvm_config_h.LLVM_ON_WIN32,
+        .LLVM_PREFIX = llvm_config_h.LLVM_PREFIX,
+        .LLVM_VERSION_MAJOR = llvm_config_h.LLVM_VERSION_MAJOR,
+        .LLVM_VERSION_MINOR = llvm_config_h.LLVM_VERSION_MINOR,
+        .LLVM_VERSION_PATCH = llvm_config_h.LLVM_VERSION_PATCH,
+        .PACKAGE_VERSION = llvm_config_h.PACKAGE_VERSION,
+
         .HAVE__CHSIZE_S = 1,
-    });
+    };
 
     return switch (which) {
         .llvm_config_h => b.addConfigHeader(.{
@@ -579,7 +746,7 @@ fn ensureGitRepoCloned(allocator: std.mem.Allocator, clone_url: []const u8, revi
 
     ensureGit(allocator);
 
-    if (std.fs.openDirAbsolute(dir, .{})) |_| {
+    if (std.fs.cwd().openDir(dir, .{})) |_| {
         const current_revision = try getCurrentGitRevision(allocator, dir);
         if (!std.mem.eql(u8, current_revision, revision)) {
             // Reset to the desired revision
@@ -653,11 +820,11 @@ fn isEnvVarTruthy(allocator: std.mem.Allocator, name: []const u8) bool {
 
 // Merge struct types A and B
 fn Merge(comptime a: type, comptime b: type) type {
-    const a_fields = @typeInfo(a).Struct.fields;
-    const b_fields = @typeInfo(b).Struct.fields;
+    const a_fields = @typeInfo(a).@"struct".fields;
+    const b_fields = @typeInfo(b).@"struct".fields;
 
     return @Type(std.builtin.Type{
-        .Struct = .{
+        .@"struct" = .{
             .layout = .auto,
             .fields = a_fields ++ b_fields,
             .decls = &.{},
@@ -669,7 +836,7 @@ fn Merge(comptime a: type, comptime b: type) type {
 // Merge struct values A and B
 fn merge(a: anytype, b: anytype) Merge(@TypeOf(a), @TypeOf(b)) {
     var merged: Merge(@TypeOf(a), @TypeOf(b)) = undefined;
-    inline for (@typeInfo(@TypeOf(merged)).Struct.fields) |f| {
+    inline for (@typeInfo(@TypeOf(merged)).@"struct".fields) |f| {
         if (@hasField(@TypeOf(a), f.name)) @field(merged, f.name) = @field(a, f.name);
         if (@hasField(@TypeOf(b), f.name)) @field(merged, f.name) = @field(b, f.name);
     }
@@ -702,8 +869,8 @@ const DownloadSourceStep = struct {
         return download_step;
     }
 
-    fn make(step_ptr: *std.Build.Step, prog_node: std.Progress.Node) anyerror!void {
-        _ = prog_node;
+    fn make(step_ptr: *std.Build.Step, make_options: Build.Step.MakeOptions) anyerror!void {
+        _ = make_options;
         const download_step: *DownloadSourceStep = @fieldParentPtr("step", step_ptr);
         const b = download_step.b;
 
@@ -727,7 +894,7 @@ var download_mutex = std.Thread.Mutex{};
 fn binaryZigTriple(arena: std.mem.Allocator, target: std.Target) ![]const u8 {
     // Craft a zig_triple string that we will use to create the binary download URL. Remove OS
     // version range / glibc version from triple, as we don't include that in our download URL.
-    var binary_target = std.zig.CrossTarget.fromTarget(target);
+    var binary_target = std.Target.Query.fromTarget(target);
     binary_target.os_version_min = .{ .none = undefined };
     binary_target.os_version_max = .{ .none = undefined };
     binary_target.glibc_version = null;
@@ -782,8 +949,8 @@ const DownloadBinaryStep = struct {
         return download_step;
     }
 
-    fn make(step_ptr: *std.Build.Step, prog_node: std.Progress.Node) anyerror!void {
-        _ = prog_node;
+    fn make(step_ptr: *std.Build.Step, make_options: Build.Step.MakeOptions) anyerror!void {
+        _ = make_options;
         const download_step: *DownloadBinaryStep = @fieldParentPtr("step", step_ptr);
         const b = download_step.b;
         const target = download_step.target;
@@ -898,6 +1065,9 @@ fn downloadExtractTarball(
                 },
                 .unsupported_file_type => |info| {
                     log.err("file '{s}' has unsupported type '{c}'", .{ info.file_name, @intFromEnum(info.file_type) });
+                },
+                .components_outside_stripped_prefix => |info| {
+                    log.err("file '{s}' contains components outside of stripped prefix", .{info.file_name});
                 },
             }
         }
