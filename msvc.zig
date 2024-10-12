@@ -135,7 +135,7 @@ const RegistryUtf8 = struct {
         const value_utf16le = try registry_utf16le.getString(allocator, subkey_utf16le, value_name_utf16le);
         defer allocator.free(value_utf16le);
 
-        const value_utf8: []u8 = std.unicode.utf16leToUtf8Alloc(allocator, value_utf16le) catch |err| switch (err) {
+        const value_utf8: []u8 = std.unicode.utf16LeToUtf8Alloc(allocator, value_utf16le) catch |err| switch (err) {
             error.OutOfMemory => return error.OutOfMemory,
             else => return error.StringNotFound,
         };
@@ -368,7 +368,7 @@ pub const Windows10Sdk = struct {
                 error.OutOfMemory => return error.OutOfMemory,
             };
 
-            if (path_maybe_with_trailing_slash.len > std.fs.MAX_PATH_BYTES or !std.fs.path.isAbsolute(path_maybe_with_trailing_slash)) {
+            if (path_maybe_with_trailing_slash.len > std.fs.max_path_bytes or !std.fs.path.isAbsolute(path_maybe_with_trailing_slash)) {
                 allocator.free(path_maybe_with_trailing_slash);
                 return error.PathTooLong;
             }
@@ -414,7 +414,7 @@ pub const Windows10Sdk = struct {
 
     /// Check whether this version is enumerated in registry.
     fn isValidVersion(windows10sdk: *const Windows10Sdk) bool {
-        var buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
+        var buf: [std.fs.max_path_bytes]u8 = undefined;
         const reg_query_as_utf8 = std.fmt.bufPrint(buf[0..], "{s}\\{s}\\Installed Options", .{ WINDOWS_KIT_REG_KEY, windows10sdk.version }) catch |err| switch (err) {
             error.NoSpaceLeft => return false,
         };
@@ -458,7 +458,7 @@ pub const Windows81Sdk = struct {
 
                 error.OutOfMemory => return error.OutOfMemory,
             };
-            if (path_maybe_with_trailing_slash.len > std.fs.MAX_PATH_BYTES or !std.fs.path.isAbsolute(path_maybe_with_trailing_slash)) {
+            if (path_maybe_with_trailing_slash.len > std.fs.max_path_bytes or !std.fs.path.isAbsolute(path_maybe_with_trailing_slash)) {
                 allocator.free(path_maybe_with_trailing_slash);
                 return error.PathTooLong;
             }
@@ -475,7 +475,7 @@ pub const Windows81Sdk = struct {
         errdefer allocator.free(path);
 
         const version: []const u8 = version81: {
-            var buf: [std.fs.MAX_PATH_BYTES]u8 = undefined;
+            var buf: [std.fs.max_path_bytes]u8 = undefined;
             const sdk_lib_dir_path = std.fmt.bufPrint(buf[0..], "{s}\\Lib\\", .{path}) catch |err| switch (err) {
                 error.NoSpaceLeft => return error.PathTooLong,
             };
@@ -822,7 +822,7 @@ pub const MsvcLibDir = struct {
                 error.OutOfMemory => return error.OutOfMemory,
                 else => continue,
             };
-            if (source_directories_value.len > (std.fs.MAX_PATH_BYTES * 30)) { // note(bratishkaerik): guessing from the fact that on my computer it has 15 pathes and at least some of them are not of max length
+            if (source_directories_value.len > (std.fs.max_path_bytes * 30)) { // note(bratishkaerik): guessing from the fact that on my computer it has 15 pathes and at least some of them are not of max length
                 allocator.free(source_directories_value);
                 continue;
             }
@@ -836,7 +836,7 @@ pub const MsvcLibDir = struct {
         const msvc_dir: []const u8 = msvc_dir: {
             const msvc_include_dir_maybe_with_trailing_slash = try allocator.dupe(u8, source_directories_splitted.first());
 
-            if (msvc_include_dir_maybe_with_trailing_slash.len > std.fs.MAX_PATH_BYTES or !std.fs.path.isAbsolute(msvc_include_dir_maybe_with_trailing_slash)) {
+            if (msvc_include_dir_maybe_with_trailing_slash.len > std.fs.max_path_bytes or !std.fs.path.isAbsolute(msvc_include_dir_maybe_with_trailing_slash)) {
                 allocator.free(msvc_include_dir_maybe_with_trailing_slash);
                 return error.PathNotFound;
             }
@@ -904,7 +904,7 @@ pub const MsvcLibDir = struct {
                     else => break :try_vs7_key,
                 };
 
-                if (path_maybe_with_trailing_slash.len > std.fs.MAX_PATH_BYTES or !std.fs.path.isAbsolute(path_maybe_with_trailing_slash)) {
+                if (path_maybe_with_trailing_slash.len > std.fs.max_path_bytes or !std.fs.path.isAbsolute(path_maybe_with_trailing_slash)) {
                     allocator.free(path_maybe_with_trailing_slash);
                     break :try_vs7_key;
                 }
