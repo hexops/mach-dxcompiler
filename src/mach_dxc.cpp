@@ -21,6 +21,7 @@
 #include <string>
 
 #include "mach_dxc.h"
+#include "dxc/Support/FileIOHelper.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -180,21 +181,27 @@ MACH_EXPORT MachDxcCompileResult machDxcCompile(
 
 MACH_EXPORT MachDxcCompileError machDxcCompileResultGetError(MachDxcCompileResult err) {
     CComPtr<IDxcResult> pCompileResult = CComPtr(reinterpret_cast<IDxcResult*>(err));
-    CComPtr<IDxcBlobUtf8> pErrors;
-    pCompileResult->GetOutput(DXC_OUT_ERRORS, IID_PPV_ARGS(&pErrors), nullptr);
-    if (pErrors && pErrors->GetStringLength() > 0) {
+    
+    CComPtr<IDxcBlobEncoding> pErrors = nullptr;
+    HRESULT hr = pCompileResult->GetErrorBuffer(&pErrors);
+
+    if (hr == S_OK && !hlsl::IsBlobNullOrEmpty(pErrors)) {
         return reinterpret_cast<MachDxcCompileError>(pErrors.Detach());
     }
+
     return nullptr;
 }
 
 MACH_EXPORT MachDxcCompileObject machDxcCompileResultGetObject(MachDxcCompileResult err) {
     CComPtr<IDxcResult> pCompileResult = CComPtr(reinterpret_cast<IDxcResult*>(err));
-    CComPtr<IDxcBlob> pObject;
-    pCompileResult->GetOutput(DXC_OUT_OBJECT, IID_PPV_ARGS(&pObject), nullptr);
-    if (pObject && pObject->GetBufferSize() > 0) {
+    
+    CComPtr<IDxcBlob> pObject = nullptr;
+    HRESULT hr = pCompileResult->GetResult(&pObject);
+
+    if (hr == S_OK && !hlsl::IsBlobNullOrEmpty(pObject)) {
         return reinterpret_cast<MachDxcCompileObject>(pObject.Detach());
     }
+
     return nullptr;
 }
 
