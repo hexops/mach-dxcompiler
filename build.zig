@@ -17,6 +17,10 @@ pub fn build(b: *Build) !void {
     const target = b.standardTargetOptions(.{});
     const from_source = b.option(bool, "from_source", "Build dxcompiler from source (large C++ codebase)") orelse false;
     const debug_symbols = b.option(bool, "debug_symbols", "Whether to produce detailed debug symbols (g0) or not. These increase binary size considerably.") orelse false;
+    const build_shared = b.option(bool, "shared", "Build dxcompiler shared libraries") orelse false;
+    const build_spirv = b.option(bool, "spirv", "Build spir-v compilation support") orelse false;
+    const skip_executables = b.option(bool, "skip_executables", "Skip building executables") orelse false;
+    const skip_tests = b.option(bool, "skip_tests", "Skip building tests") orelse false;
 
     const machdxcompiler: struct { lib: *std.Build.Step.Compile, lib_path: ?[]const u8 } = blk: {
         if (!from_source) {
@@ -25,7 +29,6 @@ pub fn build(b: *Build) !void {
             // our DownloadBinaryStep.
             const linkage = b.addStaticLibrary(.{
                 .name = "machdxcompiler-linkage",
-                .root_source_file = b.addWriteFiles().add("empty.zig", ""),
                 .optimize = optimize,
                 .target = target,
             });
@@ -36,15 +39,22 @@ pub fn build(b: *Build) !void {
             linkage.addLibraryPath(.{ .cwd_relative = cache_dir });
             linkage.linkSystemLibrary("machdxcompiler");
             linkMachDxcDependenciesModule(&linkage.root_module);
+
+            // not entirely sure this will work
+            if (build_shared) {
+                buildShared(b, linkage, optimize, target);
+            }
+
             break :blk .{ .lib = linkage, .lib_path = cache_dir };
         } else {
             const lib = b.addStaticLibrary(.{
                 .name = "machdxcompiler",
-                .root_source_file = b.addWriteFiles().add("empty.zig", ""),
                 .optimize = optimize,
                 .target = target,
             });
+
             b.installArtifact(lib);
+
             // Microsoft does some shit.
             lib.root_module.sanitize_c = false;
             lib.root_module.sanitize_thread = false; // sometimes in parallel, too.
@@ -72,6 +82,7 @@ pub fn build(b: *Build) !void {
                 try cppflags.append("-g0");
             }
             try cppflags.append("-std=c++17");
+
             const base_flags = &.{
                 "-Wno-unused-command-line-argument",
                 "-Wno-unused-variable",
@@ -81,6 +92,7 @@ pub fn build(b: *Build) !void {
                 "-Wno-implicit-fallthrough",
                 "-fms-extensions", // __uuidof and friends (on non-windows targets)
             };
+
             try cflags.appendSlice(base_flags);
             try cppflags.appendSlice(base_flags);
 
@@ -138,6 +150,24 @@ pub fn build(b: *Build) !void {
                 lib_support_c_sources ++
                 lib_dxilcompression_c_sources;
 
+            // Link lazy-loaded SPIRV-Tools
+            if (build_spirv) {
+                lib.defineCMacro("ENABLE_SPIRV_CODEGEN", "");
+
+                addSPIRVIncludes(b, lib);
+
+                // Add clang SPIRV tooling sources
+                lib.addCSourceFiles(.{
+                    .files = &lib_spirv,
+                    .flags = cppflags.items,
+                });
+
+                if (b.lazyDependency("spirv-tools", .{
+                    .target = target,
+                    .optimize = optimize,
+                })) |dep| lib.linkLibrary(dep.artifact("spirv-opt"));
+            }
+
             lib.addCSourceFiles(.{
                 .files = &cpp_sources,
                 .flags = cppflags.items,
@@ -156,6 +186,11 @@ pub fn build(b: *Build) !void {
                 lib.defineCMacro("LLVM_ON_UNIX", "1");
             }
 
+            if (build_shared) {
+                lib.defineCMacro("MACH_DXC_C_SHARED_LIBRARY", "");
+                lib.defineCMacro("MACH_DXC_C_IMPLEMENTATION", "");
+            }
+
             linkMachDxcDependencies(lib);
             lib.addIncludePath(b.path("src"));
 
@@ -164,71 +199,78 @@ pub fn build(b: *Build) !void {
             // TODO: investigate how projects/dxilconv/lib/DxbcConverter/DxbcConverterImpl.h is getting pulled
             // in, we can get rid of dxbc conversion presumably
 
-            // dxc.exe builds
-            const dxc_exe = b.addExecutable(.{
-                .name = "dxc",
-                .optimize = optimize,
-                .target = target,
-            });
-            const install_dxc_step = b.step("dxc", "Build and install dxc.exe");
-            install_dxc_step.dependOn(&b.addInstallArtifact(dxc_exe, .{}).step);
-            dxc_exe.addCSourceFile(.{
-                .file = b.path(prefix ++ "/tools/clang/tools/dxc/dxcmain.cpp"),
-                .flags = &.{"-std=c++17"},
-            });
-            dxc_exe.defineCMacro("NDEBUG", ""); // disable assertions
+            if (!skip_executables) {
+                // dxc.exe builds
+                const dxc_exe = b.addExecutable(.{
+                    .name = "dxc",
+                    .optimize = optimize,
+                    .target = target,
+                });
+                const install_dxc_step = b.step("dxc", "Build and install dxc.exe");
+                install_dxc_step.dependOn(&b.addInstallArtifact(dxc_exe, .{}).step);
+                dxc_exe.addCSourceFile(.{
+                    .file = b.path(prefix ++ "/tools/clang/tools/dxc/dxcmain.cpp"),
+                    .flags = &.{"-std=c++17"},
+                });
+                dxc_exe.defineCMacro("NDEBUG", ""); // disable assertions
 
-            if (target.result.os.tag != .windows) dxc_exe.defineCMacro("HAVE_DLFCN_H", "1");
-            dxc_exe.addIncludePath(b.path(prefix ++ "/tools/clang/tools"));
-            dxc_exe.addIncludePath(b.path(prefix ++ "/include"));
-            addConfigHeaders(b, dxc_exe);
-            addIncludes(b, dxc_exe);
-            dxc_exe.addCSourceFile(.{
-                .file = b.path(prefix ++ "/tools/clang/tools/dxclib/dxc.cpp"),
-                .flags = cppflags.items,
-            });
-            b.installArtifact(dxc_exe);
-            dxc_exe.linkLibrary(lib);
+                if (target.result.os.tag != .windows) dxc_exe.defineCMacro("HAVE_DLFCN_H", "1");
+                dxc_exe.addIncludePath(b.path(prefix ++ "/tools/clang/tools"));
+                dxc_exe.addIncludePath(b.path(prefix ++ "/include"));
+                addConfigHeaders(b, dxc_exe);
+                addIncludes(b, dxc_exe);
+                dxc_exe.addCSourceFile(.{
+                    .file = b.path(prefix ++ "/tools/clang/tools/dxclib/dxc.cpp"),
+                    .flags = cppflags.items,
+                });
+                b.installArtifact(dxc_exe);
+                dxc_exe.linkLibrary(lib);
 
-            if (target.result.os.tag == .windows) {
-                // windows must be built with LTO disabled due to:
-                // https://github.com/ziglang/zig/issues/15958
-                dxc_exe.want_lto = false;
-                if (builtin.os.tag == .windows and target.result.abi == .msvc) {
-                    const msvc_lib_dir: ?[]const u8 = try @import("msvc.zig").MsvcLibDir.find(b.allocator);
+                if (target.result.os.tag == .windows) {
+                    // windows must be built with LTO disabled due to:
+                    // https://github.com/ziglang/zig/issues/15958
+                    dxc_exe.want_lto = false;
+                    if (builtin.os.tag == .windows and target.result.abi == .msvc) {
+                        const msvc_lib_dir: ?[]const u8 = try @import("msvc.zig").MsvcLibDir.find(b.allocator);
 
-                    // The MSVC lib dir looks like this:
-                    // C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.38.33130\Lib\x64
-                    // But we need the atlmfc lib dir:
-                    // C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.38.33130\atlmfc\lib\x64
-                    const msvc_dir = try std.fs.path.resolve(b.allocator, &.{ msvc_lib_dir.?, "..\\.." });
+                        // The MSVC lib dir looks like this:
+                        // C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.38.33130\Lib\x64
+                        // But we need the atlmfc lib dir:
+                        // C:\Program Files\Microsoft Visual Studio\2022\Community\VC\Tools\MSVC\14.38.33130\atlmfc\lib\x64
+                        const msvc_dir = try std.fs.path.resolve(b.allocator, &.{ msvc_lib_dir.?, "..\\.." });
 
-                    const lib_dir_path = try std.mem.concat(b.allocator, u8, &.{
-                        msvc_dir,
-                        "\\atlmfc\\lib\\",
-                        if (target.result.cpu.arch == .aarch64) "arm64" else "x64",
-                    });
+                        const lib_dir_path = try std.mem.concat(b.allocator, u8, &.{
+                            msvc_dir,
+                            "\\atlmfc\\lib\\",
+                            if (target.result.cpu.arch == .aarch64) "arm64" else "x64",
+                        });
 
-                    const lib_path = try std.mem.concat(b.allocator, u8, &.{ lib_dir_path, "\\atls.lib" });
-                    const pdb_name = if (target.result.cpu.arch == .aarch64)
-                        "atls.arm64.pdb"
-                    else
-                        "atls.amd64.pdb";
-                    const pdb_path = try std.mem.concat(b.allocator, u8, &.{ lib_dir_path, "\\", pdb_name });
+                        const lib_path = try std.mem.concat(b.allocator, u8, &.{ lib_dir_path, "\\atls.lib" });
+                        const pdb_name = if (target.result.cpu.arch == .aarch64)
+                            "atls.arm64.pdb"
+                        else
+                            "atls.amd64.pdb";
+                        const pdb_path = try std.mem.concat(b.allocator, u8, &.{ lib_dir_path, "\\", pdb_name });
 
-                    // For some reason, msvc target needs atls.lib to be in the 'zig build' working directory.
-                    // Addomg tp the library path like this has no effect:
-                    dxc_exe.addLibraryPath(b.path(lib_dir_path));
-                    // So instead we must copy the lib into this directory:
-                    try std.fs.cwd().copyFile(lib_path, std.fs.cwd(), "atls.lib", .{});
-                    try std.fs.cwd().copyFile(pdb_path, std.fs.cwd(), pdb_name, .{});
-                    // This is probably a bug in the Zig linker.
+                        // For some reason, msvc target needs atls.lib to be in the 'zig build' working directory.
+                        // Addomg tp the library path like this has no effect:
+                        dxc_exe.addLibraryPath(b.path(lib_dir_path));
+                        // So instead we must copy the lib into this directory:
+                        try std.fs.cwd().copyFile(lib_path, std.fs.cwd(), "atls.lib", .{});
+                        try std.fs.cwd().copyFile(pdb_path, std.fs.cwd(), pdb_name, .{});
+                        // This is probably a bug in the Zig linker.
+                    }
                 }
             }
+
+            if (build_shared) buildShared(b, lib, optimize, target);
 
             break :blk .{ .lib = lib, .lib_path = null };
         }
     };
+
+    if (skip_executables)
+        return;
 
     // Zig bindings
     const mach_dxcompiler = b.addModule("mach-dxcompiler", .{
@@ -239,7 +281,11 @@ pub fn build(b: *Build) !void {
     mach_dxcompiler.addIncludePath(b.path("src"));
 
     mach_dxcompiler.linkLibrary(machdxcompiler.lib);
+
     if (machdxcompiler.lib_path) |p| mach_dxcompiler.addLibraryPath(.{ .cwd_relative = p });
+
+    if (skip_tests)
+        return;
 
     const main_tests = b.addTest(.{
         .name = "dxcompiler-tests",
@@ -254,6 +300,25 @@ pub fn build(b: *Build) !void {
     b.installArtifact(main_tests);
     const test_step = b.step("test", "Run library tests");
     test_step.dependOn(&b.addRunArtifact(main_tests).step);
+}
+
+fn buildShared(b: *Build, lib: *Build.Step.Compile, optimize: std.builtin.OptimizeMode, target: std.Build.ResolvedTarget) void {
+    const sharedlib = b.addSharedLibrary(.{
+        .name = "machdxcompiler",
+        .optimize = optimize,
+        .target = target,
+    });
+
+    sharedlib.addCSourceFile(.{
+        .file = b.path("src/shared_main.cpp"),
+        .flags = &.{"-std=c++17"},
+    });
+
+    const shared_install_step = b.step("machdxcompiler", "Build and install the machdxcompiler shared library");
+    shared_install_step.dependOn(&b.addInstallArtifact(sharedlib, .{}).step);
+
+    b.installArtifact(sharedlib);
+    sharedlib.linkLibrary(lib);
 }
 
 fn linkMachDxcDependencies(step: *std.Build.Step.Compile) void {
@@ -289,7 +354,18 @@ fn addConfigHeaders(b: *Build, step: *std.Build.Step.Compile) void {
             .style = .{ .cmake = b.path("config-headers/tools/clang/include/clang/Config/config.h.cmake") },
             .include_path = "clang/Config/config.h",
         },
-        .{},
+        .{
+            .BUG_REPORT_URL = null,
+            .CLANG_DEFAULT_OPENMP_RUNTIME = null,
+            .CLANG_LIBDIR_SUFFIX = null,
+            .CLANG_RESOURCE_DIR = null,
+            .C_INCLUDE_DIRS = null,
+            .DEFAULT_SYSROOT = null,
+            .GCC_INSTALL_PREFIX = null,
+            .CLANG_HAVE_LIBXML = 0,
+            .BACKEND_PACKAGE_STRING = null,
+            .HOST_LINK_VERSION = null,
+        },
     ));
 
     // /include/llvm/Config/AsmParsers.def.in
@@ -298,7 +374,7 @@ fn addConfigHeaders(b: *Build, step: *std.Build.Step.Compile) void {
             .style = .{ .cmake = b.path("config-headers/include/llvm/Config/AsmParsers.def.in") },
             .include_path = "llvm/Config/AsmParsers.def",
         },
-        .{},
+        .{ .LLVM_ENUM_ASM_PARSERS = null },
     ));
 
     // /include/llvm/Config/Disassemblers.def.in
@@ -307,7 +383,7 @@ fn addConfigHeaders(b: *Build, step: *std.Build.Step.Compile) void {
             .style = .{ .cmake = b.path("config-headers/include/llvm/Config/Disassemblers.def.in") },
             .include_path = "llvm/Config/Disassemblers.def",
         },
-        .{},
+        .{ .LLVM_ENUM_DISASSEMBLERS = null },
     ));
 
     // /include/llvm/Config/Targets.def.in
@@ -316,7 +392,7 @@ fn addConfigHeaders(b: *Build, step: *std.Build.Step.Compile) void {
             .style = .{ .cmake = b.path("config-headers/include/llvm/Config/Targets.def.in") },
             .include_path = "llvm/Config/Targets.def",
         },
-        .{},
+        .{ .LLVM_ENUM_TARGETS = null },
     ));
 
     // /include/llvm/Config/AsmPrinters.def.in
@@ -325,7 +401,7 @@ fn addConfigHeaders(b: *Build, step: *std.Build.Step.Compile) void {
             .style = .{ .cmake = b.path("config-headers/include/llvm/Config/AsmPrinters.def.in") },
             .include_path = "llvm/Config/AsmPrinters.def",
         },
-        .{},
+        .{ .LLVM_ENUM_ASM_PRINTERS = null },
     ));
 
     // /include/llvm/Support/DataTypes.h.cmake
@@ -337,8 +413,8 @@ fn addConfigHeaders(b: *Build, step: *std.Build.Step.Compile) void {
         .{
             .HAVE_INTTYPES_H = 1,
             .HAVE_STDINT_H = 1,
+            .HAVE_U_INT64_T = 0,
             .HAVE_UINT64_T = 1,
-            // /* #undef HAVE_U_INT64_T */
         },
     ));
 
@@ -394,8 +470,17 @@ fn addIncludes(b: *Build, step: *std.Build.Step.Compile) void {
     step.addIncludePath(b.path(prefix ++ "/include/llvm/Passes"));
     step.addIncludePath(b.path(prefix ++ "/include/dxc"));
     step.addIncludePath(b.path(prefix ++ "/external/DirectX-Headers/include/directx"));
+
     const target = step.rootModuleTarget();
     if (target.os.tag != .windows) step.addIncludePath(b.path(prefix ++ "/external/DirectX-Headers/include/wsl/stubs"));
+}
+
+fn addSPIRVIncludes(b: *Build, step: *std.Build.Step.Compile) void {
+    step.addIncludePath(b.path(prefix ++ "/external/SPIRV-Tools"));
+    step.addIncludePath(b.path(prefix ++ "/external/SPIRV-Tools/include"));
+    step.addIncludePath(b.path(prefix ++ "/external/SPIRV-Tools/source"));
+
+    step.addIncludePath(b.path(prefix ++ "/external/SPIRV-Headers/include"));
 }
 
 // /include/llvm/Config/llvm-config.h.cmake
@@ -403,81 +488,234 @@ fn addIncludes(b: *Build, step: *std.Build.Step.Compile) void {
 fn addConfigHeaderLLVMConfig(b: *Build, target: std.Target, which: anytype) *std.Build.Step.ConfigHeader {
     // Note: LLVM_HOST_TRIPLEs can be found by running $ llc --version | grep Default
     // Note: arm64 is an alias for aarch64, we always use aarch64 over arm64.
-    const cross_platform = .{
+
+    const LLVMConfigH = struct {
+        LLVM_BINDIR: ?[]const u8 = null,
+        LLVM_CONFIGTIME: ?[]const u8 = null,
+        LLVM_DATADIR: ?[]const u8 = null,
+        LLVM_DEFAULT_TARGET_TRIPLE: []const u8,
+        LLVM_DOCSDIR: ?[]const u8 = null,
+        LLVM_ENABLE_THREADS: ?i64 = null,
+        LLVM_ETCDIR: ?[]const u8 = null,
+        LLVM_HAS_ATOMICS: ?i64 = null,
+        LLVM_HOST_TRIPLE: []const u8 = "",
+        LLVM_INCLUDEDIR: ?[]const u8 = null,
+        LLVM_INFODIR: ?[]const u8 = null,
+        LLVM_MANDIR: ?[]const u8 = null,
+        LLVM_NATIVE_ARCH: []const u8 = "",
+        LLVM_ON_UNIX: ?i64 = null,
+        LLVM_ON_WIN32: ?i64 = null,
+        LLVM_PREFIX: []const u8,
+        LLVM_VERSION_MAJOR: u8,
+        LLVM_VERSION_MINOR: u8,
+        LLVM_VERSION_PATCH: u8,
+        PACKAGE_VERSION: []const u8,
+    };
+
+    var llvm_config_h: LLVMConfigH = .{
         .LLVM_PREFIX = "/usr/local",
         .LLVM_DEFAULT_TARGET_TRIPLE = "dxil-ms-dx",
         .LLVM_ENABLE_THREADS = 1,
         .LLVM_HAS_ATOMICS = 1,
+        .LLVM_HOST_TRIPLE = "",
         .LLVM_VERSION_MAJOR = 3,
         .LLVM_VERSION_MINOR = 7,
         .LLVM_VERSION_PATCH = 0,
-        .LLVM_VERSION_STRING = "3.7-v1.4.0.2274-1812-machdxcompiler",
+        .PACKAGE_VERSION = "3.7-v1.4.0.2274-1812-g84da60c6c-dirty",
     };
 
-    const LLVMConfigH = struct {
-        LLVM_HOST_TRIPLE: []const u8,
-        LLVM_ON_WIN32: ?i64 = null,
-        LLVM_ON_UNIX: ?i64 = null,
-        HAVE_SYS_MMAN_H: ?i64 = null,
-    };
-    const llvm_config_h = blk: {
-        if (target.os.tag == .windows) {
-            break :blk switch (target.abi) {
-                .msvc => switch (target.cpu.arch) {
-                    .x86_64 => merge(cross_platform, LLVMConfigH{
-                        .LLVM_HOST_TRIPLE = "x86_64-w64-msvc",
-                        .LLVM_ON_WIN32 = 1,
-                    }),
-                    .aarch64 => merge(cross_platform, LLVMConfigH{
-                        .LLVM_HOST_TRIPLE = "aarch64-w64-msvc",
-                        .LLVM_ON_WIN32 = 1,
-                    }),
-                    else => @panic("target architecture not supported"),
-                },
-                .gnu => switch (target.cpu.arch) {
-                    .x86_64 => merge(cross_platform, LLVMConfigH{
-                        .LLVM_HOST_TRIPLE = "x86_64-w64-mingw32",
-                        .LLVM_ON_WIN32 = 1,
-                    }),
-                    .aarch64 => merge(cross_platform, LLVMConfigH{
-                        .LLVM_HOST_TRIPLE = "aarch64-w64-mingw32",
-                        .LLVM_ON_WIN32 = 1,
-                    }),
-                    else => @panic("target architecture not supported"),
-                },
-                else => @panic("target ABI not supported"),
-            };
-        } else if (target.os.tag.isDarwin()) {
-            break :blk switch (target.cpu.arch) {
-                .aarch64 => merge(cross_platform, LLVMConfigH{
-                    .LLVM_HOST_TRIPLE = "aarch64-apple-darwin",
-                    .LLVM_ON_UNIX = 1,
-                    .HAVE_SYS_MMAN_H = 1,
-                }),
-                .x86_64 => merge(cross_platform, LLVMConfigH{
-                    .LLVM_HOST_TRIPLE = "x86_64-apple-darwin",
-                    .LLVM_ON_UNIX = 1,
-                    .HAVE_SYS_MMAN_H = 1,
-                }),
+    if (target.os.tag == .windows) {
+        llvm_config_h.LLVM_ON_WIN32 = 1;
+        switch (target.abi) {
+            .msvc => switch (target.cpu.arch) {
+                .x86_64 => llvm_config_h.LLVM_HOST_TRIPLE = "x86_64-w64-msvc",
+                .aarch64 => llvm_config_h.LLVM_HOST_TRIPLE = "aarch64-w64-msvc",
                 else => @panic("target architecture not supported"),
-            };
-        } else {
-            // Assume linux-like
-            // TODO: musl support?
-            break :blk switch (target.cpu.arch) {
-                .aarch64 => merge(cross_platform, LLVMConfigH{
-                    .LLVM_HOST_TRIPLE = "aarch64-linux-gnu",
-                    .LLVM_ON_UNIX = 1,
-                    .HAVE_SYS_MMAN_H = 1,
-                }),
-                .x86_64 => merge(cross_platform, LLVMConfigH{
-                    .LLVM_HOST_TRIPLE = "x86_64-linux-gnu",
-                    .LLVM_ON_UNIX = 1,
-                    .HAVE_SYS_MMAN_H = 1,
-                }),
+            },
+            .gnu => switch (target.cpu.arch) {
+                .x86_64 => llvm_config_h.LLVM_HOST_TRIPLE = "x86_64-w64-mingw32",
+                .aarch64 => llvm_config_h.LLVM_HOST_TRIPLE = "aarch64-w64-mingw32",
                 else => @panic("target architecture not supported"),
-            };
+            },
+            else => @panic("target ABI not supported"),
         }
+    } else if (target.os.tag.isDarwin()) {
+        llvm_config_h.LLVM_ON_UNIX = 1;
+        switch (target.cpu.arch) {
+            .aarch64 => llvm_config_h.LLVM_HOST_TRIPLE = "aarch64-apple-darwin",
+            .x86_64 => llvm_config_h.LLVM_HOST_TRIPLE = "x86_64-apple-darwin",
+            else => @panic("target architecture not supported"),
+        }
+    } else {
+        // Assume linux-like
+        // TODO: musl support?
+        llvm_config_h.LLVM_ON_UNIX = 1;
+        switch (target.cpu.arch) {
+            .aarch64 => llvm_config_h.LLVM_HOST_TRIPLE = "aarch64-linux-gnu",
+            .x86_64 => llvm_config_h.LLVM_HOST_TRIPLE = "x86_64-linux-gnu",
+            else => @panic("target architecture not supported"),
+        }
+    }
+
+    const CONFIG_H = struct {
+        BUG_REPORT_URL: []const u8 = "http://llvm.org/bugs/",
+        ENABLE_BACKTRACES: []const u8 = "",
+        ENABLE_CRASH_OVERRIDES: []const u8 = "",
+        DISABLE_LLVM_DYLIB_ATEXIT: []const u8 = "",
+        ENABLE_PIC: []const u8 = "",
+        ENABLE_TIMESTAMPS: ?i64 = null,
+        HAVE_DECL_ARC4RANDOM: ?i64 = null,
+        HAVE_BACKTRACE: ?i64 = null,
+        HAVE_CLOSEDIR: ?i64 = null,
+        HAVE_CXXABI_H: ?i64 = null,
+        HAVE_DECL_STRERROR_S: ?i64 = null,
+        HAVE_DIRENT_H: ?i64 = null,
+        HAVE_DIA_SDK: ?i64 = null,
+        HAVE_DLERROR: ?i64 = null,
+        HAVE_DLFCN_H: ?i64 = null,
+        HAVE_DLOPEN: ?i64 = null,
+        HAVE_ERRNO_H: ?i64 = null,
+        HAVE_EXECINFO_H: ?i64 = null,
+        HAVE_FCNTL_H: ?i64 = null,
+        HAVE_FENV_H: ?i64 = null,
+        HAVE_FFI_CALL: ?i64 = null,
+        HAVE_FFI_FFI_H: ?i64 = null,
+        HAVE_FFI_H: ?i64 = null,
+        HAVE_FUTIMENS: ?i64 = null,
+        HAVE_FUTIMES: ?i64 = null,
+        HAVE_GETCWD: ?i64 = null,
+        HAVE_GETPAGESIZE: ?i64 = null,
+        HAVE_GETRLIMIT: ?i64 = null,
+        HAVE_GETRUSAGE: ?i64 = null,
+        HAVE_GETTIMEOFDAY: ?i64 = null,
+        HAVE_INT64_T: ?i64 = null,
+        HAVE_INTTYPES_H: ?i64 = null,
+        HAVE_ISATTY: ?i64 = null,
+        HAVE_LIBDL: ?i64 = null,
+        HAVE_LIBEDIT: ?i64 = null,
+        HAVE_LIBPSAPI: ?i64 = null,
+        HAVE_LIBPTHREAD: ?i64 = null,
+        HAVE_LIBSHELL32: ?i64 = null,
+        HAVE_LIBZ: ?i64 = null,
+        HAVE_LIMITS_H: ?i64 = null,
+        HAVE_LINK_EXPORT_DYNAMIC: ?i64 = null,
+        HAVE_LINK_H: ?i64 = null,
+        HAVE_LONGJMP: ?i64 = null,
+        HAVE_MACH_MACH_H: ?i64 = null,
+        HAVE_MACH_O_DYLD_H: ?i64 = null,
+        HAVE_MALLCTL: ?i64 = null,
+        HAVE_MALLINFO: ?i64 = null,
+        HAVE_MALLINFO2: ?i64 = null,
+        HAVE_MALLOC_H: ?i64 = null,
+        HAVE_MALLOC_MALLOC_H: ?i64 = null,
+        HAVE_MALLOC_ZONE_STATISTICS: ?i64 = null,
+        HAVE_MKDTEMP: ?i64 = null,
+        HAVE_MKSTEMP: ?i64 = null,
+        HAVE_MKTEMP: ?i64 = null,
+        HAVE_NDIR_H: ?i64 = null,
+        HAVE_OPENDIR: ?i64 = null,
+        HAVE_POSIX_SPAWN: ?i64 = null,
+        HAVE_PREAD: ?i64 = null,
+        HAVE_PTHREAD_GETSPECIFIC: ?i64 = null,
+        HAVE_PTHREAD_H: ?i64 = null,
+        HAVE_PTHREAD_MUTEX_LOCK: ?i64 = null,
+        HAVE_PTHREAD_RWLOCK_INIT: ?i64 = null,
+        HAVE_RAND48: ?i64 = null,
+        HAVE_READDIR: ?i64 = null,
+        HAVE_REALPATH: ?i64 = null,
+        HAVE_SBRK: ?i64 = null,
+        HAVE_SETENV: ?i64 = null,
+        HAVE_SETJMP: ?i64 = null,
+        HAVE_SETRLIMIT: ?i64 = null,
+        HAVE_SIGLONGJMP: ?i64 = null,
+        HAVE_SIGNAL_H: ?i64 = null,
+        HAVE_SIGSETJMP: ?i64 = null,
+        HAVE_STDINT_H: ?i64 = null,
+        HAVE_STRDUP: ?i64 = null,
+        HAVE_STRERROR_R: ?i64 = null,
+        HAVE_STRERROR: ?i64 = null,
+        HAVE_STRTOLL: ?i64 = null,
+        HAVE_STRTOQ: ?i64 = null,
+        HAVE_SYS_DIR_H: ?i64 = null,
+        HAVE_SYS_IOCTL_H: ?i64 = null,
+        HAVE_SYS_MMAN_H: ?i64 = null,
+        HAVE_SYS_NDIR_H: ?i64 = null,
+        HAVE_SYS_PARAM_H: ?i64 = null,
+        HAVE_SYS_RESOURCE_H: ?i64 = null,
+        HAVE_SYS_STAT_H: ?i64 = null,
+        HAVE_SYS_TIME_H: ?i64 = null,
+        HAVE_SYS_TYPES_H: ?i64 = null,
+        HAVE_SYS_UIO_H: ?i64 = null,
+        HAVE_SYS_WAIT_H: ?i64 = null,
+        HAVE_TERMINFO: ?i64 = null,
+        HAVE_TERMIOS_H: ?i64 = null,
+        HAVE_UINT64_T: ?i64 = null,
+        HAVE_UNISTD_H: ?i64 = null,
+        HAVE_UTIME_H: ?i64 = null,
+        HAVE_U_INT64_T: ?i64 = null,
+        HAVE_VALGRIND_VALGRIND_H: ?i64 = null,
+        HAVE_WRITEV: ?i64 = null,
+        HAVE_ZLIB_H: ?i64 = null,
+        HAVE__ALLOCA: ?i64 = null,
+        HAVE___ALLOCA: ?i64 = null,
+        HAVE___ASHLDI3: ?i64 = null,
+        HAVE___ASHRDI3: ?i64 = null,
+        HAVE___CHKSTK: ?i64 = null,
+        HAVE___CHKSTK_MS: ?i64 = null,
+        HAVE___CMPDI2: ?i64 = null,
+        HAVE___DIVDI3: ?i64 = null,
+        HAVE___FIXDFDI: ?i64 = null,
+        HAVE___FIXSFDI: ?i64 = null,
+        HAVE___FLOATDIDF: ?i64 = null,
+        HAVE___LSHRDI3: ?i64 = null,
+        HAVE___MAIN: ?i64 = null,
+        HAVE___MODDI3: ?i64 = null,
+        HAVE___UDIVDI3: ?i64 = null,
+        HAVE___UMODDI3: ?i64 = null,
+        HAVE____CHKSTK: ?i64 = null,
+        HAVE____CHKSTK_MS: ?i64 = null,
+        LLVM_BINDIR: ?[]const u8 = null,
+        LLVM_CONFIGTIME: ?[]const u8 = null,
+        LLVM_DATADIR: ?[]const u8 = null,
+        LLVM_DEFAULT_TARGET_TRIPLE: []const u8,
+        LLVM_DOCSDIR: ?[]const u8 = null,
+        LLVM_ENABLE_THREADS: ?i64 = null,
+        LLVM_ENABLE_ZLIB: ?i64 = null,
+        LLVM_ETCDIR: ?[]const u8 = null,
+        LLVM_HAS_ATOMICS: ?i64 = null,
+        LLVM_HOST_TRIPLE: []const u8 = "",
+        LLVM_INCLUDEDIR: ?[]const u8 = null,
+        LLVM_INFODIR: ?[]const u8 = null,
+        LLVM_MANDIR: ?[]const u8 = null,
+        LLVM_NATIVE_ARCH: []const u8 = "",
+        LLVM_ON_UNIX: ?i64 = null,
+        LLVM_ON_WIN32: ?i64 = null,
+        LLVM_PREFIX: []const u8,
+        LLVM_VERSION_MAJOR: u8,
+        LLVM_VERSION_MINOR: u8,
+        LLVM_VERSION_PATCH: u8,
+
+        // LTDL_... isn't an i64, but we don't use them and I am unsure
+        // what type is more appropriate.
+        LTDL_DLOPEN_DEPLIBS: ?i64 = null,
+        LTDL_SHLIB_EXT: ?i64 = null,
+        LTDL_SYSSEARCHPATH: ?i64 = null,
+
+        PACKAGE_BUGREPORT: []const u8 = "http://llvm.org/bugs/",
+        PACKAGE_NAME: []const u8 = "LLVM",
+        PACKAGE_STRING: []const u8 = "LLVM 3.7-v1.4.0.2274-1812-g84da60c6c-dirty",
+        PACKAGE_VERSION: []const u8,
+        RETSIGTYPE: []const u8 = "void",
+        WIN32_ELMCB_PCSTR: []const u8 = "PCSTR",
+
+        // str... isn't an i64, but we don't use them and I am unsure
+        // what type is more appropriate. Perhaps a function pointer?
+        strtoll: ?i64 = null,
+        strtoull: ?i64 = null,
+        stricmp: ?i64 = null,
+        strdup: ?i64 = null,
+
+        HAVE__CHSIZE_S: ?i64 = null,
     };
 
     const tag = target.os.tag;
@@ -486,7 +724,7 @@ fn addConfigHeaderLLVMConfig(b: *Build, target: std.Target, which: anytype) *std
     const if_windows_or_linux: ?i64 = if (tag == .windows and !tag.isDarwin()) 1 else null;
     const if_darwin: ?i64 = if (tag.isDarwin()) 1 else null;
     const if_not_msvc: ?i64 = if (target.abi != .msvc) 1 else null;
-    const config_h = merge(llvm_config_h, .{
+    const config_h = CONFIG_H{
         .HAVE_STRERROR = if_windows,
         .HAVE_STRERROR_R = if_not_windows,
         .HAVE_MALLOC_H = if_windows_or_linux,
@@ -500,12 +738,8 @@ fn addConfigHeaderLLVMConfig(b: *Build, target: std.Target, which: anytype) *std
         .HAVE_DLOPEN = if_not_windows,
         .HAVE_DLFCN_H = if_not_windows, //
         .HAVE_UNISTD_H = if_not_msvc,
+        .HAVE_SYS_MMAN_H = if_not_windows,
 
-        .BUG_REPORT_URL = "http://llvm.org/bugs/",
-        .ENABLE_BACKTRACES = "",
-        .ENABLE_CRASH_OVERRIDES = "",
-        .DISABLE_LLVM_DYLIB_ATEXIT = "",
-        .ENABLE_PIC = "",
         .ENABLE_TIMESTAMPS = 1,
         .HAVE_CLOSEDIR = 1,
         .HAVE_CXXABI_H = 1,
@@ -549,15 +783,22 @@ fn addConfigHeaderLLVMConfig(b: *Build, target: std.Target, which: anytype) *std
         .HAVE___UDIVDI3 = 1,
         .HAVE___UMODDI3 = 1,
         .HAVE____CHKSTK_MS = 1,
+
+        .LLVM_DEFAULT_TARGET_TRIPLE = llvm_config_h.LLVM_DEFAULT_TARGET_TRIPLE,
+        .LLVM_ENABLE_THREADS = llvm_config_h.LLVM_ENABLE_THREADS,
         .LLVM_ENABLE_ZLIB = 0,
-        .PACKAGE_BUGREPORT = "http://llvm.org/bugs/",
-        .PACKAGE_NAME = "LLVM",
-        .PACKAGE_STRING = "LLVM 3.7-v1.4.0.2274-1812-g84da60c6c-dirty",
-        .PACKAGE_VERSION = "3.7-v1.4.0.2274-1812-g84da60c6c-dirty",
-        .RETSIGTYPE = "void",
-        .WIN32_ELMCB_PCSTR = "PCSTR",
+        .LLVM_HAS_ATOMICS = llvm_config_h.LLVM_HAS_ATOMICS,
+        .LLVM_HOST_TRIPLE = llvm_config_h.LLVM_HOST_TRIPLE,
+        .LLVM_ON_UNIX = llvm_config_h.LLVM_ON_UNIX,
+        .LLVM_ON_WIN32 = llvm_config_h.LLVM_ON_WIN32,
+        .LLVM_PREFIX = llvm_config_h.LLVM_PREFIX,
+        .LLVM_VERSION_MAJOR = llvm_config_h.LLVM_VERSION_MAJOR,
+        .LLVM_VERSION_MINOR = llvm_config_h.LLVM_VERSION_MINOR,
+        .LLVM_VERSION_PATCH = llvm_config_h.LLVM_VERSION_PATCH,
+        .PACKAGE_VERSION = llvm_config_h.PACKAGE_VERSION,
+
         .HAVE__CHSIZE_S = 1,
-    });
+    };
 
     return switch (which) {
         .llvm_config_h => b.addConfigHeader(.{
@@ -572,6 +813,31 @@ fn addConfigHeaderLLVMConfig(b: *Build, target: std.Target, which: anytype) *std
     };
 }
 
+fn ensureCommandExists(allocator: std.mem.Allocator, name: []const u8, exist_check: []const u8) bool {
+    const result = std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = &[_][]const u8{ name, exist_check },
+        .cwd = ".",
+    }) catch // e.g. FileNotFound
+        {
+        return false;
+    };
+
+    defer {
+        allocator.free(result.stderr);
+        allocator.free(result.stdout);
+    }
+
+    if (result.term.Exited != 0)
+        return false;
+
+    return true;
+}
+
+// ------------------------------------------
+// Source cloning logic
+// ------------------------------------------
+
 fn ensureGitRepoCloned(allocator: std.mem.Allocator, clone_url: []const u8, revision: []const u8, dir: []const u8) !void {
     if (isEnvVarTruthy(allocator, "NO_ENSURE_SUBMODULES") or isEnvVarTruthy(allocator, "NO_ENSURE_GIT")) {
         return;
@@ -579,7 +845,7 @@ fn ensureGitRepoCloned(allocator: std.mem.Allocator, clone_url: []const u8, revi
 
     ensureGit(allocator);
 
-    if (std.fs.openDirAbsolute(dir, .{})) |_| {
+    if (std.fs.cwd().openDir(dir, .{})) |_| {
         const current_revision = try getCurrentGitRevision(allocator, dir);
         if (!std.mem.eql(u8, current_revision, revision)) {
             // Reset to the desired revision
@@ -608,21 +874,9 @@ fn getCurrentGitRevision(allocator: std.mem.Allocator, cwd: []const u8) ![]const
     return result.stdout;
 }
 
+// Command validation logic moved to ensureCommandExists()
 fn ensureGit(allocator: std.mem.Allocator) void {
-    const argv = &[_][]const u8{ "git", "--version" };
-    const result = std.process.Child.run(.{
-        .allocator = allocator,
-        .argv = argv,
-        .cwd = ".",
-    }) catch { // e.g. FileNotFound
-        log.err("'git --version' failed. Is git not installed?", .{});
-        std.process.exit(1);
-    };
-    defer {
-        allocator.free(result.stderr);
-        allocator.free(result.stdout);
-    }
-    if (result.term.Exited != 0) {
+    if (!ensureCommandExists(allocator, "git", "--version")) {
         log.err("'git --version' failed. Is git not installed?", .{});
         std.process.exit(1);
     }
@@ -653,11 +907,11 @@ fn isEnvVarTruthy(allocator: std.mem.Allocator, name: []const u8) bool {
 
 // Merge struct types A and B
 fn Merge(comptime a: type, comptime b: type) type {
-    const a_fields = @typeInfo(a).Struct.fields;
-    const b_fields = @typeInfo(b).Struct.fields;
+    const a_fields = @typeInfo(a).@"struct".fields;
+    const b_fields = @typeInfo(b).@"struct".fields;
 
     return @Type(std.builtin.Type{
-        .Struct = .{
+        .@"struct" = .{
             .layout = .auto,
             .fields = a_fields ++ b_fields,
             .decls = &.{},
@@ -669,7 +923,7 @@ fn Merge(comptime a: type, comptime b: type) type {
 // Merge struct values A and B
 fn merge(a: anytype, b: anytype) Merge(@TypeOf(a), @TypeOf(b)) {
     var merged: Merge(@TypeOf(a), @TypeOf(b)) = undefined;
-    inline for (@typeInfo(@TypeOf(merged)).Struct.fields) |f| {
+    inline for (@typeInfo(@TypeOf(merged)).@"struct".fields) |f| {
         if (@hasField(@TypeOf(a), f.name)) @field(merged, f.name) = @field(a, f.name);
         if (@hasField(@TypeOf(b), f.name)) @field(merged, f.name) = @field(b, f.name);
     }
@@ -702,8 +956,8 @@ const DownloadSourceStep = struct {
         return download_step;
     }
 
-    fn make(step_ptr: *std.Build.Step, prog_node: std.Progress.Node) anyerror!void {
-        _ = prog_node;
+    fn make(step_ptr: *std.Build.Step, make_options: Build.Step.MakeOptions) anyerror!void {
+        _ = make_options;
         const download_step: *DownloadSourceStep = @fieldParentPtr("step", step_ptr);
         const b = download_step.b;
 
@@ -727,7 +981,7 @@ var download_mutex = std.Thread.Mutex{};
 fn binaryZigTriple(arena: std.mem.Allocator, target: std.Target) ![]const u8 {
     // Craft a zig_triple string that we will use to create the binary download URL. Remove OS
     // version range / glibc version from triple, as we don't include that in our download URL.
-    var binary_target = std.zig.CrossTarget.fromTarget(target);
+    var binary_target = std.Target.Query.fromTarget(target);
     binary_target.os_version_min = .{ .none = undefined };
     binary_target.os_version_max = .{ .none = undefined };
     binary_target.glibc_version = null;
@@ -782,8 +1036,8 @@ const DownloadBinaryStep = struct {
         return download_step;
     }
 
-    fn make(step_ptr: *std.Build.Step, prog_node: std.Progress.Node) anyerror!void {
-        _ = prog_node;
+    fn make(step_ptr: *std.Build.Step, make_options: Build.Step.MakeOptions) anyerror!void {
+        _ = make_options;
         const download_step: *DownloadBinaryStep = @fieldParentPtr("step", step_ptr);
         const b = download_step.b;
         const target = download_step.target;
@@ -898,6 +1152,9 @@ fn downloadExtractTarball(
                 },
                 .unsupported_file_type => |info| {
                     log.err("file '{s}' has unsupported type '{c}'", .{ info.file_name, @intFromEnum(info.file_type) });
+                },
+                .components_outside_stripped_prefix => |info| {
+                    log.err("file '{s}' contains components outside of stripped prefix", .{info.file_name});
                 },
             }
         }
@@ -1981,4 +2238,40 @@ const lib_dxilrootsignature_sources = [_][]const u8{
     "libs/DirectXShaderCompiler/lib/DxilRootSignature/DxilRootSignatureSerializer.cpp",
     "libs/DirectXShaderCompiler/lib/DxilRootSignature/DxilRootSignatureConvert.cpp",
     "libs/DirectXShaderCompiler/lib/DxilRootSignature/DxilRootSignatureValidator.cpp",
+};
+
+// SPIRV-Tools stuff
+// find libs/DirectXShaderCompiler/external/SPIRV-Tools/source | grep '\.cpp$' | xargs -I {} -n1 echo '"{}",' | pbcopy
+
+const lib_spirv = [_][]const u8{
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/RemoveBufferBlockVisitor.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/LiteralTypeVisitor.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/AlignmentSizeCalculator.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/RawBufferMethods.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/GlPerVertex.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/SpirvFunction.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/LowerTypeVisitor.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/SpirvInstruction.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/DeclResultIdMapper.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/SpirvEmitter.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/SpirvBuilder.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/FeatureManager.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/SpirvModule.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/BlockReadableOrder.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/SignaturePackingUtil.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/CapabilityVisitor.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/SpirvBasicBlock.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/NonUniformVisitor.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/RelaxedPrecisionVisitor.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/SpirvType.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/SortDebugInfoVisitor.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/SpirvContext.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/PreciseVisitor.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/EmitSpirvAction.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/PervertexInputVisitor.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/EmitVisitor.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/String.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/AstTypeProbe.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/DebugTypeVisitor.cpp",
+    "libs/DirectXShaderCompiler/tools/clang/lib/SPIRV/InitListHandler.cpp",
 };

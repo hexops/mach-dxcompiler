@@ -34,6 +34,35 @@ typedef struct MachDxcCompileResultImpl* MachDxcCompileResult MACH_OBJECT_ATTRIB
 typedef struct MachDxcCompileErrorImpl* MachDxcCompileError MACH_OBJECT_ATTRIBUTE;
 typedef struct MachDxcCompileObjectImpl* MachDxcCompileObject MACH_OBJECT_ATTRIBUTE;
 
+
+typedef struct MachDxcIncludeResult {
+    const char* header_data; // UTF-8 or null
+    size_t header_length;
+} MachDxcIncludeResult;
+
+typedef MachDxcIncludeResult* (*MachDxcIncludeFunc)(void* ctx, const char* header_name);
+
+typedef int (*MachDxcFreeIncludeFunc)(void* ctx, MachDxcIncludeResult* result);
+
+typedef struct MachDxcIncludeCallbacks {
+    void* include_ctx;
+    MachDxcIncludeFunc include_func;
+    MachDxcFreeIncludeFunc free_func;
+} MachDxcIncludeCallbacks;
+
+
+typedef struct MachDxcCompileOptions {
+    // Required
+    char const* code;
+    size_t code_len;
+    char const* const* args;
+    size_t args_len;
+
+    // Optional
+    MachDxcIncludeCallbacks* include_callbacks; // nullable
+} MachDxcCompileOptions;
+
+
 //----------------
 // MachDxcCompiler
 //----------------
@@ -55,10 +84,7 @@ MACH_EXPORT void machDxcDeinit(MachDxcCompiler compiler);
 /// Invoke machDxcCompileResultDeinit when done with the result.
 MACH_EXPORT MachDxcCompileResult machDxcCompile(
     MachDxcCompiler compiler,
-    char const* code,
-    size_t code_len,
-    char const* const* args,
-    size_t args_len
+    MachDxcCompileOptions* options
 );
 
 /// Returns an error object, or null in the case of success.
