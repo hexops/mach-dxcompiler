@@ -27,7 +27,7 @@
             .lazy = true,
         },
         .DIA = .{
-            .url = "git+https://github.com/slimsag/DIA#069cf38846b3f7ae079f5fb37a760edd4591529e",
+            .url = "https://github.com/slimsag/DIA/archive/069cf38846b3f7ae079f5fb37a760edd4591529e.tar.gz",
             .hash = "1220ff2cc3b96f221da5683d523175dcd9b47f9a2acdf24f5350e246a1f7aadb2601",
             .lazy = true,
         },
@@ -37,7 +37,7 @@
             .lazy = true,
         },
         .@"SPIRV-Headers" = .{
-            .url = "git+https://github.com/KhronosGroup/SPIRV-Headers#1bfd27101e4578d0284061bdf8f09fb4755c7c2d",
+            .url = "https://github.com/KhronosGroup/SPIRV-Headers/archive/1bfd27101e4578d0284061bdf8f09fb4755c7c2d.tar.gz",
             .hash = "122082a1487ea8e9185c6bea2850a53f376279d62bb06158cd357dbecb0fd02219ac",
             // .lazy = true, // NOTE: not marked as lazy due to bug(?) in zig compiler
         },
