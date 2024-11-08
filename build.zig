@@ -45,7 +45,7 @@ pub fn build(b: *Build) !void {
             }
 
             break :blk .{ .lib = linkage, .lib_path = cache_dir };
-        } else if (b.lazyDependency("DirectXShaderCompiler", .{})) |dxc_sources| {
+        } else {
             const lib = b.addStaticLibrary(.{
                 .name = "machdxcompiler",
                 .optimize = optimize,
@@ -92,7 +92,8 @@ pub fn build(b: *Build) !void {
             try cflags.appendSlice(base_flags);
             try cppflags.appendSlice(base_flags);
 
-            const dxh_sources = b.lazyDependency("directx-headers", .{}) orelse return;
+            const dxh_sources = b.lazyDependency("directx-headers", .{}) orelse break :blk .{ .lib = lib, .lib_path = null };
+            const dxc_sources = b.lazyDependency("DirectXShaderCompiler", .{}) orelse break :blk .{ .lib = lib, .lib_path = null };
 
             addConfigHeaders(b, lib);
             addIncludes(b, dxc_sources, dxh_sources, lib);
