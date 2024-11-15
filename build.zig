@@ -309,7 +309,7 @@ pub fn build(b: *Build) !void {
 
 fn buildShared(b: *Build, lib: *Build.Step.Compile, optimize: std.builtin.OptimizeMode, target: std.Build.ResolvedTarget) void {
     const sharedlib = b.addSharedLibrary(.{
-        .name = "machdxcompiler",
+        .name = "machdxcompiler-shared",
         .optimize = optimize,
         .target = target,
     });
