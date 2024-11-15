@@ -21,5 +21,25 @@
             .hash = "1220cb3152f957ad886b0eff7468e4c6580b1461c4c3d0c5d4e6848dd76b1ed7123e",
             .lazy = true,
         },
+        .DirectXShaderCompiler = .{
+            .url = "https://pkg.machengine.org/DirectXShaderCompiler/4190bb0c90d374c6b4d0b0f2c7b45b604eda24b6.tar.gz",
+            .hash = "12208fcd0779f1a4d195af0b6dfa096c5fc8058888e943e981b3549e4be9c3f630e1",
+            .lazy = true,
+        },
+        .DIA = .{
+            .url = "https://github.com/slimsag/DIA/archive/069cf38846b3f7ae079f5fb37a760edd4591529e.tar.gz",
+            .hash = "1220ff2cc3b96f221da5683d523175dcd9b47f9a2acdf24f5350e246a1f7aadb2601",
+            .lazy = true,
+        },
+        .@"directx-headers" = .{
+            .url = "https://pkg.machengine.org/directx-headers/da7a056ee37d0f1e18e49f098f1d5261ab19990e.tar.gz",
+            .hash = "1220f4d1a3d50918abc71672092b515ea25549b498ce61f2ce03aa1b0780833ee85b",
+            .lazy = true,
+        },
+        .@"SPIRV-Headers" = .{
+            .url = "https://github.com/KhronosGroup/SPIRV-Headers/archive/1bfd27101e4578d0284061bdf8f09fb4755c7c2d.tar.gz",
+            .hash = "122082a1487ea8e9185c6bea2850a53f376279d62bb06158cd357dbecb0fd02219ac",
+            // .lazy = true, // NOTE: not marked as lazy due to bug(?) in zig compiler
+        },
     },
 }
