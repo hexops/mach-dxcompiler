@@ -19,6 +19,7 @@ pub fn build(b: *Build) !void {
     const debug_symbols = b.option(bool, "debug_symbols", "Whether to produce detailed debug symbols (g0) or not. These increase binary size considerably.") orelse false;
     const build_shared = b.option(bool, "shared", "Build dxcompiler shared libraries") orelse false;
     const build_spirv = b.option(bool, "spirv", "Build spir-v compilation support") orelse false;
+    const msvcrt_dynamic = b.option(bool, "msvcrt_dynamic", "Link with the dynamic MSVC runtime") orelse false;
     const skip_executables = b.option(bool, "skip_executables", "Skip building executables") orelse false;
     const skip_tests = b.option(bool, "skip_tests", "Skip building tests") orelse false;
 
@@ -64,7 +65,10 @@ pub fn build(b: *Build) !void {
 
             lib.addCSourceFile(.{
                 .file = b.path("src/mach_dxc.cpp"),
-                .flags = &.{
+                .flags = if (msvcrt_dynamic) &.{
+                    "-fms-extensions", // __uuidof and friends (on non-windows targets)
+                    "-fms-runtime-lib=dll",
+                } else &.{
                     "-fms-extensions", // __uuidof and friends (on non-windows targets)
                 },
             });
@@ -95,6 +99,11 @@ pub fn build(b: *Build) !void {
 
             try cflags.appendSlice(base_flags);
             try cppflags.appendSlice(base_flags);
+
+            if (msvcrt_dynamic) {
+                try cflags.append("-fms-runtime-lib=dll");
+                try cppflags.append("-fms-runtime-lib=dll");
+            }
 
             addConfigHeaders(b, lib);
             addIncludes(b, lib);
