@@ -24,7 +24,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   all:
     needs: draft_release
-    if: false
     strategy:
       matrix:
         target: [
