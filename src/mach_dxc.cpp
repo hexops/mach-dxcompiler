@@ -3,8 +3,9 @@
     #ifdef _MSC_VER
         #define __C89_NAMELESS
         #define __C89_NAMELESSUNIONNAME
+        #include <atlbase.h>
+        #include <locale.h>
         #include <windows.h>
-        #include <wrl/client.h>
     #else // _MSC_VER
         #include <windows.h>
         #include <wrl/client.h>
@@ -20,14 +21,6 @@
 
 #include "mach_dxc.h"
 #include "dxc/Support/FileIOHelper.h"
-
-
-#ifdef _WIN32
-    #ifdef _MSC_VER
-        #define CComPtr Microsoft::WRL::ComPtr
-    #endif
-    #include <locale.h>
-#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -124,7 +117,7 @@ MACH_EXPORT MachDxcCompiler machDxcInit() {
 
 MACH_EXPORT void machDxcDeinit(MachDxcCompiler compiler) {
     CComPtr<IDxcCompiler3> dxcInstance = CComPtr<IDxcCompiler3>(reinterpret_cast<IDxcCompiler3*>(compiler));
-    dxcInstance.Reset();
+    dxcInstance.Release();
     MachDxcompilerInvokeDllShutdown();
 }
 
@@ -164,7 +157,7 @@ MACH_EXPORT MachDxcCompileResult machDxcCompile(
 
     MachDxcIncludeHandler* handler = nullptr;
     if (options->include_callbacks != nullptr) // Leave include handler as default (nullptr) unless there's available callbacks
-        handler = new MachDxcIncludeHandler(options->include_callbacks, pUtils.Get());
+        handler = new MachDxcIncludeHandler(options->include_callbacks, pUtils);
 
     CComPtr<IDxcResult> pCompileResult;
     HRESULT hr = dxcInstance->Compile(
@@ -191,7 +184,7 @@ MACH_EXPORT MachDxcCompileError machDxcCompileResultGetError(MachDxcCompileResul
     CComPtr<IDxcBlobEncoding> pErrors = nullptr;
     HRESULT hr = pCompileResult->GetErrorBuffer(&pErrors);
 
-    if (hr == S_OK && !hlsl::IsBlobNullOrEmpty(pErrors.Get())) {
+    if (hr == S_OK && !hlsl::IsBlobNullOrEmpty(pErrors)) {
         return reinterpret_cast<MachDxcCompileError>(pErrors.Detach());
     }
 
@@ -204,7 +197,7 @@ MACH_EXPORT MachDxcCompileObject machDxcCompileResultGetObject(MachDxcCompileRes
     CComPtr<IDxcBlob> pObject = nullptr;
     HRESULT hr = pCompileResult->GetResult(&pObject);
 
-    if (hr == S_OK && !hlsl::IsBlobNullOrEmpty(pObject.Get())) {
+    if (hr == S_OK && !hlsl::IsBlobNullOrEmpty(pObject)) {
         return reinterpret_cast<MachDxcCompileObject>(pObject.Detach());
     }
 
@@ -213,7 +206,7 @@ MACH_EXPORT MachDxcCompileObject machDxcCompileResultGetObject(MachDxcCompileRes
 
 MACH_EXPORT void machDxcCompileResultDeinit(MachDxcCompileResult err) {
     CComPtr<IDxcResult> pCompileResult = CComPtr<IDxcResult>(reinterpret_cast<IDxcResult*>(err));
-    pCompileResult.Reset();
+    pCompileResult.Release();
 }
 
 //---------------------
@@ -231,7 +224,7 @@ MACH_EXPORT size_t machDxcCompileObjectGetBytesLength(MachDxcCompileObject err) 
 
 MACH_EXPORT void machDxcCompileObjectDeinit(MachDxcCompileObject err) {
     CComPtr<IDxcBlob> pObject = CComPtr<IDxcBlob>(reinterpret_cast<IDxcBlob*>(err));
-    pObject.Reset();
+    pObject.Release();
 }
 
 //--------------------
@@ -249,7 +242,7 @@ MACH_EXPORT size_t machDxcCompileErrorGetStringLength(MachDxcCompileError err) {
 
 MACH_EXPORT void machDxcCompileErrorDeinit(MachDxcCompileError err) {
     CComPtr<IDxcBlobUtf8> pErrors = CComPtr<IDxcBlobUtf8>(reinterpret_cast<IDxcBlobUtf8*>(err));
-    pErrors.Reset();
+    pErrors.Release();
 }
 
 #ifdef __cplusplus
