@@ -3,10 +3,8 @@
     #ifdef _MSC_VER
         #define __C89_NAMELESS
         #define __C89_NAMELESSUNIONNAME
-        #define WIN32_LEAN_AND_MEAN
         #include <windows.h>
         #include <wrl/client.h>
-        #define CComPtr Microsoft::WRL::ComPtr
     #else // _MSC_VER
         #include <windows.h>
         #include <wrl/client.h>
@@ -23,6 +21,14 @@
 #include "mach_dxc.h"
 #include "dxc/Support/FileIOHelper.h"
 
+
+#ifdef _WIN32
+    #ifdef _MSC_VER
+        #define CComPtr Microsoft::WRL::ComPtr
+    #endif
+    #include <locale.h>
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -35,7 +41,7 @@ char* wcstombsAlloc(const wchar_t* inval)
    
     auto buf = (char*)std::malloc(outsz);
     std::memset(buf, 0, outsz);
-    std::setlocale(LC_CTYPE,""); 
+    setlocale(LC_CTYPE,""); 
     size = std::wcstombs(buf, inval, size * sizeof(wchar_t));
 
     if (size == (size_t)(-1)) {
@@ -79,7 +85,7 @@ public:
         char* filename_utf8 = wcstombsAlloc(filename);
 
         if (filename_utf8 == nullptr)
-            filename_utf8 = strdup(u8"");
+            filename_utf8 = _strdup(u8"");
 
         MachDxcIncludeResult* include_result = callbacks->include_func(callbacks->include_ctx, filename_utf8);
 
@@ -117,8 +123,8 @@ MACH_EXPORT MachDxcCompiler machDxcInit() {
 }
 
 MACH_EXPORT void machDxcDeinit(MachDxcCompiler compiler) {
-    CComPtr<IDxcCompiler3> dxcInstance = CComPtr(reinterpret_cast<IDxcCompiler3*>(compiler));
-    dxcInstance.Release();
+    CComPtr<IDxcCompiler3> dxcInstance = CComPtr<IDxcCompiler3>(reinterpret_cast<IDxcCompiler3*>(compiler));
+    dxcInstance.Reset();
     MachDxcompilerInvokeDllShutdown();
 }
 
@@ -130,7 +136,7 @@ MACH_EXPORT MachDxcCompileResult machDxcCompile(
     MachDxcCompiler compiler,
     MachDxcCompileOptions* options
 ) {
-    CComPtr<IDxcCompiler3> dxcInstance = CComPtr(reinterpret_cast<IDxcCompiler3*>(compiler));
+    CComPtr<IDxcCompiler3> dxcInstance = CComPtr<IDxcCompiler3>(reinterpret_cast<IDxcCompiler3*>(compiler));
 
     CComPtr<IDxcUtils> pUtils;
     DxcCreateInstance(CLSID_DxcUtils, IID_PPV_ARGS(&pUtils));
@@ -158,7 +164,7 @@ MACH_EXPORT MachDxcCompileResult machDxcCompile(
 
     MachDxcIncludeHandler* handler = nullptr;
     if (options->include_callbacks != nullptr) // Leave include handler as default (nullptr) unless there's available callbacks
-        handler = new MachDxcIncludeHandler(options->include_callbacks, pUtils);
+        handler = new MachDxcIncludeHandler(options->include_callbacks, pUtils.Get());
 
     CComPtr<IDxcResult> pCompileResult;
     HRESULT hr = dxcInstance->Compile(
@@ -180,12 +186,12 @@ MACH_EXPORT MachDxcCompileResult machDxcCompile(
 }
 
 MACH_EXPORT MachDxcCompileError machDxcCompileResultGetError(MachDxcCompileResult err) {
-    CComPtr<IDxcResult> pCompileResult = CComPtr(reinterpret_cast<IDxcResult*>(err));
+    CComPtr<IDxcResult> pCompileResult = CComPtr<IDxcResult>(reinterpret_cast<IDxcResult*>(err));
     
     CComPtr<IDxcBlobEncoding> pErrors = nullptr;
     HRESULT hr = pCompileResult->GetErrorBuffer(&pErrors);
 
-    if (hr == S_OK && !hlsl::IsBlobNullOrEmpty(pErrors)) {
+    if (hr == S_OK && !hlsl::IsBlobNullOrEmpty(pErrors.Get())) {
         return reinterpret_cast<MachDxcCompileError>(pErrors.Detach());
     }
 
@@ -193,12 +199,12 @@ MACH_EXPORT MachDxcCompileError machDxcCompileResultGetError(MachDxcCompileResul
 }
 
 MACH_EXPORT MachDxcCompileObject machDxcCompileResultGetObject(MachDxcCompileResult err) {
-    CComPtr<IDxcResult> pCompileResult = CComPtr(reinterpret_cast<IDxcResult*>(err));
+    CComPtr<IDxcResult> pCompileResult = CComPtr<IDxcResult>(reinterpret_cast<IDxcResult*>(err));
     
     CComPtr<IDxcBlob> pObject = nullptr;
     HRESULT hr = pCompileResult->GetResult(&pObject);
 
-    if (hr == S_OK && !hlsl::IsBlobNullOrEmpty(pObject)) {
+    if (hr == S_OK && !hlsl::IsBlobNullOrEmpty(pObject.Get())) {
         return reinterpret_cast<MachDxcCompileObject>(pObject.Detach());
     }
 
@@ -206,44 +212,44 @@ MACH_EXPORT MachDxcCompileObject machDxcCompileResultGetObject(MachDxcCompileRes
 }
 
 MACH_EXPORT void machDxcCompileResultDeinit(MachDxcCompileResult err) {
-    CComPtr<IDxcResult> pCompileResult = CComPtr(reinterpret_cast<IDxcResult*>(err));
-    pCompileResult.Release();
+    CComPtr<IDxcResult> pCompileResult = CComPtr<IDxcResult>(reinterpret_cast<IDxcResult*>(err));
+    pCompileResult.Reset();
 }
 
 //---------------------
 // MachDxcCompileObject
 //---------------------
 MACH_EXPORT char const* machDxcCompileObjectGetBytes(MachDxcCompileObject err) {
-    CComPtr<IDxcBlob> pObject = CComPtr(reinterpret_cast<IDxcBlob*>(err));
+    CComPtr<IDxcBlob> pObject = CComPtr<IDxcBlob>(reinterpret_cast<IDxcBlob*>(err));
     return (char const*)(pObject->GetBufferPointer());
 }
 
 MACH_EXPORT size_t machDxcCompileObjectGetBytesLength(MachDxcCompileObject err) {
-    CComPtr<IDxcBlob> pObject = CComPtr(reinterpret_cast<IDxcBlob*>(err));
+    CComPtr<IDxcBlob> pObject = CComPtr<IDxcBlob>(reinterpret_cast<IDxcBlob*>(err));
     return pObject->GetBufferSize();
 }
 
 MACH_EXPORT void machDxcCompileObjectDeinit(MachDxcCompileObject err) {
-    CComPtr<IDxcBlob> pObject = CComPtr(reinterpret_cast<IDxcBlob*>(err));
-    pObject.Release();
+    CComPtr<IDxcBlob> pObject = CComPtr<IDxcBlob>(reinterpret_cast<IDxcBlob*>(err));
+    pObject.Reset();
 }
 
 //--------------------
 // MachDxcCompileError
 //--------------------
 MACH_EXPORT char const* machDxcCompileErrorGetString(MachDxcCompileError err) {
-    CComPtr<IDxcBlobUtf8> pErrors = CComPtr(reinterpret_cast<IDxcBlobUtf8*>(err));
+    CComPtr<IDxcBlobUtf8> pErrors = CComPtr<IDxcBlobUtf8>(reinterpret_cast<IDxcBlobUtf8*>(err));
     return (char const*)(pErrors->GetBufferPointer());
 }
 
 MACH_EXPORT size_t machDxcCompileErrorGetStringLength(MachDxcCompileError err) {
-    CComPtr<IDxcBlobUtf8> pErrors = CComPtr(reinterpret_cast<IDxcBlobUtf8*>(err));
+    CComPtr<IDxcBlobUtf8> pErrors = CComPtr<IDxcBlobUtf8>(reinterpret_cast<IDxcBlobUtf8*>(err));
     return pErrors->GetStringLength();
 }
 
 MACH_EXPORT void machDxcCompileErrorDeinit(MachDxcCompileError err) {
-    CComPtr<IDxcBlobUtf8> pErrors = CComPtr(reinterpret_cast<IDxcBlobUtf8*>(err));
-    pErrors.Release();
+    CComPtr<IDxcBlobUtf8> pErrors = CComPtr<IDxcBlobUtf8>(reinterpret_cast<IDxcBlobUtf8*>(err));
+    pErrors.Reset();
 }
 
 #ifdef __cplusplus
