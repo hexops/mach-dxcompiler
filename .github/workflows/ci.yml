@@ -24,6 +24,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   all:
     needs: draft_release
+    if: false
     strategy:
       matrix:
         target: [
@@ -82,15 +83,18 @@ jobs:
           # 'aarch64-windows-msvc',
         ]
         optimize: [Debug, ReleaseFast]
+        link-mode: ['Static', 'Dynamic']
         include:
           - target: 'x86_64-windows-msvc'
+            link-mode: 'Static'
             cpu: '-Dcpu=x86_64_v2'
             link-flags: ''
             post-build: 'install dxc'
             target-postfix: ''
           - target: 'x86_64-windows-msvc'
+            link-mode: 'Dynamic'
             cpu: '-Dcpu=x86_64_v2'
-            link-flags: '-Dmsvcrt_dynamic'
+            link-flags: '-Dmsvcrt_dynamic -Dskip_executables'
             post-build: ''
             target-postfix: '_Dynamic'
     runs-on: windows-latest
@@ -109,14 +113,14 @@ jobs:
       - name: upload
         run: |
           ZSTD_CLEVEL=19 tar -acf "${TARGET_OPT}_lib.tar.zst" -C zig-out/lib .
-          ZSTD_CLEVEL=19 tar -acf "${TARGET_OPT}_bin.tar.zst" -C zig-out/bin .
+          if [[ "${{ matrix.link-mode }}" == "Static" ]]; then ZSTD_CLEVEL=19 tar -acf "${TARGET_OPT}_bin.tar.zst" -C zig-out/bin . ; fi
           ZSTD_CLEVEL=19 tar -acf "${TARGET_OPT}_lib.tar.gz" -C zig-out/lib .
-          ZSTD_CLEVEL=19 tar -acf "${TARGET_OPT}_bin.tar.gz" -C zig-out/bin .
+          if [[ "${{ matrix.link-mode }}" == "Static" ]]; then ZSTD_CLEVEL=19 tar -acf "${TARGET_OPT}_bin.tar.gz" -C zig-out/bin . ; fi
           export RELEASE="$(date -u +%Y.%m.%d)+$(git rev-parse --short HEAD).${{ github.run_attempt }}"
           gh release upload "$RELEASE" "${TARGET_OPT}_lib.tar.zst"
-          gh release upload "$RELEASE" "${TARGET_OPT}_bin.tar.zst"
+          if [[ "${{ matrix.link-mode }}" == "Static" ]]; then gh release upload "$RELEASE" "${TARGET_OPT}_bin.tar.zst"; fi
           gh release upload "$RELEASE" "${TARGET_OPT}_lib.tar.gz"
-          gh release upload "$RELEASE" "${TARGET_OPT}_bin.tar.gz"
+          if [[ "${{ matrix.link-mode }}" == "Static" ]]; then gh release upload "$RELEASE" "${TARGET_OPT}_bin.tar.gz"; fi
         shell: bash
         env:
           WINDOWS: true
