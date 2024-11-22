@@ -254,7 +254,7 @@ pub fn build(b: *Build) !void {
 
                         // For some reason, msvc target needs atls.lib to be in the 'zig build' working directory.
                         // Addomg tp the library path like this has no effect:
-                        dxc_exe.addLibraryPath(b.path(lib_dir_path));
+                        dxc_exe.addLibraryPath(.{ .cwd_relative = lib_dir_path });
                         // So instead we must copy the lib into this directory:
                         try std.fs.cwd().copyFile(lib_path, std.fs.cwd(), "atls.lib", .{});
                         try std.fs.cwd().copyFile(pdb_path, std.fs.cwd(), pdb_name, .{});
