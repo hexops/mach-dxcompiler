@@ -17,8 +17,8 @@
     },
     .dependencies = .{
         .@"spirv-tools" = .{
-            .url = "https://pkg.machengine.org/spirv-tools/5d14d57d0cf8709f5ea155b32eccccd3cbcb7dca.tar.gz",
-            .hash = "1220cb3152f957ad886b0eff7468e4c6580b1461c4c3d0c5d4e6848dd76b1ed7123e",
+            .url = "https://pkg.machengine.org/spirv-tools/8d61652d6e7f922d12632034485d6569e27fb974.tar.gz",
+            .hash = "1220f2b3b1b11c69ecfd2c0a9ed59066e76b61db0935e1bfab917d8c3096cb65eabe",
             .lazy = true,
         },
     },
