@@ -53,7 +53,7 @@ jobs:
       - name: Setup Zig
         run: |
           sudo apt install xz-utils
-          sudo sh -c 'wget -c https://pkg.machengine.org/zig/zig-linux-x86_64-0.14.0-dev.1911+3bf89f55c.tar.xz -O - | tar -xJ --strip-components=1 -C /usr/local/bin'
+          sudo sh -c 'wget -c https://pkg.machengine.org/zig/zig-linux-x86_64-0.14.0-dev.2577+271452d22.tar.xz -O - | tar -xJ --strip-components=1 -C /usr/local/bin'
       - name: build
         run: zig build -Dfrom_source -Dtarget=${{ matrix.target }} -Doptimize=${{ matrix.optimize }} ${{ matrix.cpu }} install dxc
       - name: upload
@@ -92,10 +92,10 @@ jobs:
       - name: Setup Zig
         run: |
           $ProgressPreference = 'SilentlyContinue'
-          Invoke-WebRequest -Uri "https://pkg.machengine.org/zig/zig-windows-x86_64-0.14.0-dev.1911+3bf89f55c.zip" -OutFile "C:\zig.zip"
+          Invoke-WebRequest -Uri "https://pkg.machengine.org/zig/zig-windows-x86_64-0.14.0-dev.2577+271452d22.zip" -OutFile "C:\zig.zip"
           cd C:\
           7z x zig.zip
-          Add-Content $env:GITHUB_PATH "C:\zig-windows-x86_64-0.14.0-dev.1911+3bf89f55c\"
+          Add-Content $env:GITHUB_PATH "C:\zig-windows-x86_64-0.14.0-dev.2577+271452d22\"
       - name: build
         run: zig build -Dfrom_source -Dtarget=${{ matrix.target }} -Doptimize=${{ matrix.optimize }} ${{ matrix.cpu }} install dxc
       - name: upload
