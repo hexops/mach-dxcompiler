@@ -18,7 +18,7 @@ namespace Microsoft {
 
             typedef int BoolStruct::* BoolType;
 
-            inline void DECLSPEC_NORETURN RaiseException(HRESULT hr, DWORD flags = EXCEPTION_NONCONTINUABLE) throw() {
+            inline void RaiseException(HRESULT hr, DWORD flags = EXCEPTION_NONCONTINUABLE) throw() {
                 ::RaiseException(static_cast<DWORD>(hr), flags, 0, NULL);
             }
 
